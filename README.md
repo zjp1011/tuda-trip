@@ -241,21 +241,6 @@ localStorage.tour_ai_guest_id
 | `/api/user-memory` | GET / POST | 获取、保存用户偏好 |
 | `/api/weather` | GET | 查询目的地天气 |
 
-## GitHub 上传前注意
-
-不要提交以下文件：
-
-- `.env.local`
-- `.data/`
-- `.next/`
-- `node_modules/`
-- `dev.log`
-- `next-dev.err.log`
-- `next-dev.out.log`
-- `tsconfig.tsbuildinfo`
-
-这些文件已经在 `.gitignore` 中忽略。
-
 ## 部署建议
 
 推荐部署到 Vercel。部署时需要在 Vercel 项目的 Environment Variables 中配置 `.env.local.example` 里的变量。
@@ -265,18 +250,6 @@ localStorage.tour_ai_guest_id
 - `NEXT_PUBLIC_SHARE_BASE_URL` 必须填写线上域名
 - `.data/*.json` 只适合本地开发，不适合 Serverless 生产环境长期存储
 - 生产环境建议把收藏、分享、记忆、Trace 改成数据库或 KV 存储
-
-## 面试讲解角度
-
-这个项目可以从以下角度讲：
-
-- 不是简单聊天页，而是一个面向旅行规划任务的 Agent 应用
-- 使用结构化输出把大模型结果变成可渲染、可保存、可分享的数据
-- 使用语义缓存降低重复生成成本
-- 使用天气工具和用户记忆提升个性化程度
-- 使用 Guardrails 降低模型输出不稳定带来的前端风险
-- 使用 Agent Trace 展示可观测性，方便调试和解释 Agent 行为
-- 使用分享页、收藏、下载和社交文案生成形成完整产品闭环
 
 ## 后续规划
 
