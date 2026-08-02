@@ -56,8 +56,8 @@ export async function POST(request: Request) {
       plan: body.plan,
     };
 
-    const trips = await saveRoute(body.userId, savedTrip);
-    return NextResponse.json({ trips, savedTrip });
+    const result = await saveRoute(body.userId, savedTrip);
+    return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(
       {

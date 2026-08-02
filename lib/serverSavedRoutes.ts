@@ -30,18 +30,26 @@ export async function saveRoute(userId: string, savedTrip: SavedTrip) {
   const store = await readStore();
   const existingTrips = store[userId] ?? [];
   const planSignature = JSON.stringify(savedTrip.plan);
-  const isAlreadySaved = existingTrips.some(
+  const existingTrip = existingTrips.find(
     (trip) => JSON.stringify(trip.plan) === planSignature,
   );
 
-  if (isAlreadySaved) {
-    return existingTrips;
+  if (existingTrip) {
+    return {
+      trips: existingTrips,
+      savedTrip: existingTrip,
+      created: false,
+    };
   }
 
   const nextTrips = [savedTrip, ...existingTrips];
   store[userId] = nextTrips;
   await writeStore(store);
-  return nextTrips;
+  return {
+    trips: nextTrips,
+    savedTrip,
+    created: true,
+  };
 }
 
 export async function deleteSavedRoute(userId: string, savedTripId: string) {

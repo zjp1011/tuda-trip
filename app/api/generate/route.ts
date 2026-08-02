@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 import { generateEmbedding } from "../../../lib/openai";
+import { formatUserMemoryForPrompt, normalizeMemoryPreferences } from "../../../lib/userMemory";
+import {
+  formatWeatherForPrompt,
+  getDestinationWeather,
+  type DestinationWeather,
+} from "../../../lib/weatherTool";
 import type { TravelPlansResponse } from "../../../types/travel";
 
 type GenerateRequestBody = {
@@ -11,6 +17,7 @@ type GenerateRequestBody = {
   travelStyles?: string[];
   foodPreferences?: string[];
   customFoodPreference?: string;
+  userMemoryPreferences?: string[];
 };
 
 type NormalizedGenerateRequest = {
@@ -22,6 +29,7 @@ type NormalizedGenerateRequest = {
   travelStyles: string[];
   foodPreferences: string[];
   customFoodPreference: string;
+  userMemoryPreferences: string[];
 };
 
 type TravelCacheMetadata = {
@@ -42,6 +50,7 @@ function normalizeRequestBody(body: GenerateRequestBody): NormalizedGenerateRequ
   const travelStyles = Array.isArray(body.travelStyles) ? body.travelStyles.slice(0, 3) : [];
   const foodPreferences = Array.isArray(body.foodPreferences) ? body.foodPreferences : [];
   const customFoodPreference = body.customFoodPreference?.trim() ?? "";
+  const userMemoryPreferences = normalizeMemoryPreferences(body.userMemoryPreferences);
 
   if (!destination || !Number.isInteger(days) || days < 1 || days > 7 || !companion) {
     return null;
@@ -56,10 +65,11 @@ function normalizeRequestBody(body: GenerateRequestBody): NormalizedGenerateRequ
     travelStyles,
     foodPreferences,
     customFoodPreference,
+    userMemoryPreferences,
   };
 }
 
-function buildCacheKeyText(body: NormalizedGenerateRequest) {
+function buildCacheKeyText(body: NormalizedGenerateRequest, weather: DestinationWeather | null) {
   return [
     body.destination,
     `${body.days}天`,
@@ -69,12 +79,15 @@ function buildCacheKeyText(body: NormalizedGenerateRequest) {
     ...body.travelStyles,
     ...body.foodPreferences,
     body.customFoodPreference,
+    ...body.userMemoryPreferences,
+    weather ? new Date().toISOString().slice(0, 10) : "",
+    weather?.summary ?? "",
   ]
     .filter(Boolean)
     .join(" ");
 }
 
-function buildUserPrompt(body: NormalizedGenerateRequest) {
+function buildUserPrompt(body: NormalizedGenerateRequest, weather: DestinationWeather | null) {
   const budgetText = body.customBudget
     ? `自定义人均 ${body.customBudget} 元`
     : body.budgetPreference;
@@ -89,6 +102,10 @@ function buildUserPrompt(body: NormalizedGenerateRequest) {
 - 旅游风格：${body.travelStyles.length > 0 ? body.travelStyles.join("、") : "未指定"}
 - 必吃美食类别：${body.foodPreferences.length > 0 ? body.foodPreferences.join("、") : "未指定"}
 - 自定义饮食偏好：${body.customFoodPreference || "未指定"}
+- 长期偏好记忆：${formatUserMemoryForPrompt(body.userMemoryPreferences)}
+
+天气工具结果：
+${formatWeatherForPrompt(weather)}
 
 要求：
 1. 只返回 JSON，不要输出 Markdown、解释、代码块或额外文字。
@@ -105,6 +122,8 @@ function buildUserPrompt(body: NormalizedGenerateRequest) {
 12. 必须严格参考人均预算安排餐饮、交通、住宿区域和活动，不要推荐明显超出预算的路线。
 13. 如果用户填写了自定义金额，必须优先按照自定义金额控制预算，而不是预算档位。
 14. budget_per_person 必须输出与用户预算匹配的预估区间，例如自定义人均 800 元时可输出 700-900元。
+15. 必须参考长期偏好记忆。如果长期记忆和本次表单冲突，以本次表单为准，并在 tips 中给出规避或替代建议。
+16. 必须参考天气工具结果。如果有降雨、高温或低温风险，要调整户外/室内节奏，并在 tips 中给出雨天、防晒或保暖建议。
 
 JSON 输出格式示例：
 {
@@ -196,7 +215,10 @@ async function queryTravelPlanCache(embedding: number[]) {
   }
 }
 
-async function generateTravelPlanWithLLM(body: NormalizedGenerateRequest) {
+async function generateTravelPlanWithLLM(
+  body: NormalizedGenerateRequest,
+  weather: DestinationWeather | null,
+) {
   const apiKey = process.env.DEEPSEEK_API_KEY;
 
   if (!apiKey) {
@@ -218,7 +240,7 @@ async function generateTravelPlanWithLLM(body: NormalizedGenerateRequest) {
         },
         {
           role: "user",
-          content: buildUserPrompt(body),
+          content: buildUserPrompt(body, weather),
         },
       ],
       response_format: { type: "json_object" },
@@ -287,7 +309,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const cacheKeyText = buildCacheKeyText(normalizedBody);
+    let weather: DestinationWeather | null = null;
+
+    try {
+      weather = await getDestinationWeather(normalizedBody.destination, normalizedBody.days);
+    } catch (error) {
+      console.warn("Weather tool failed, continuing without weather:", error);
+    }
+
+    const cacheKeyText = buildCacheKeyText(normalizedBody, weather);
     const embedding = await generateEmbedding(cacheKeyText);
     const cachedTravelPlan = await queryTravelPlanCache(embedding);
 
@@ -295,7 +325,7 @@ export async function POST(request: Request) {
       return NextResponse.json(cachedTravelPlan);
     }
 
-    const travelPlan = await generateTravelPlanWithLLM(normalizedBody);
+    const travelPlan = await generateTravelPlanWithLLM(normalizedBody, weather);
     await upsertTravelPlanCache(embedding, cacheKeyText, travelPlan);
 
     console.log("🐌 新生成并已缓存");

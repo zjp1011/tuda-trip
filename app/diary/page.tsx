@@ -5,6 +5,8 @@ import PlanDisplay from "../../components/PlanDisplay";
 import SocialShareModal from "../../components/SocialShareModal";
 import { useUser } from "../../hooks/useUser";
 import { downloadTravelPlanHtml } from "../../lib/exportTravelPlan";
+import type { AgentTrace } from "../../lib/serverAgentTrace";
+import { buildShareUrl, isLocalShareUrl } from "../../lib/shareUrl";
 import {
   LEGACY_SAVED_TRIPS_STORAGE_KEY,
   SAVED_TRIPS_STORAGE_KEY,
@@ -32,10 +34,29 @@ function readLegacySavedTrips() {
   }
 }
 
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
 export default function DiaryPage() {
   const { guestId } = useUser();
   const [savedTrips, setSavedTrips] = useState<SavedTrip[]>([]);
   const [selectedTrip, setSelectedTrip] = useState<SavedTrip | null>(null);
+  const [agentTraces, setAgentTraces] = useState<AgentTrace[]>([]);
+  const [shareMessage, setShareMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -81,6 +102,16 @@ export default function DiaryPage() {
         const trips = data.trips ?? [];
         setSavedTrips(trips);
         setSelectedTrip(trips[0] ?? null);
+
+        const traceResponse = await fetch(`/api/refine-route?userId=${encodeURIComponent(guestId)}`);
+        const traceData = (await traceResponse.json()) as {
+          traces?: AgentTrace[];
+          error?: string;
+        };
+
+        if (traceResponse.ok) {
+          setAgentTraces(traceData.traces ?? []);
+        }
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "获取收藏行程失败");
       } finally {
@@ -125,6 +156,40 @@ export default function DiaryPage() {
     }
   };
 
+  const shareSavedTrip = async (savedTrip: SavedTrip) => {
+    setShareMessage("");
+    setErrorMessage("");
+
+    try {
+      const response = await fetch("/api/share-route", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ savedTrip }),
+      });
+      const data = (await response.json()) as {
+        sharedRoute?: { id: string };
+        error?: string;
+        details?: string;
+      };
+
+      if (!response.ok || !data.sharedRoute) {
+        throw new Error(data.details ?? data.error ?? "创建分享链接失败");
+      }
+
+      const shareUrl = buildShareUrl(data.sharedRoute.id);
+      await copyTextToClipboard(shareUrl);
+      setShareMessage(
+        isLocalShareUrl(shareUrl)
+          ? "本地分享链接已复制，但 localhost 只能在你这台电脑打开；外发需要先部署或配置公网访问地址。"
+          : "分享链接已复制，可以发给朋友查看。",
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "创建分享链接失败");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#070707] px-5 py-8 text-white sm:px-8 lg:px-12">
       <div className="mx-auto max-w-6xl">
@@ -141,6 +206,12 @@ export default function DiaryPage() {
         {errorMessage ? (
           <p className="mb-5 rounded-2xl border border-red-300/20 bg-red-500/15 px-4 py-3 text-sm font-semibold text-red-100">
             {errorMessage}
+          </p>
+        ) : null}
+
+        {shareMessage ? (
+          <p className="mb-5 rounded-2xl border border-orange-200/20 bg-orange-300/10 px-4 py-3 text-sm font-semibold text-orange-100">
+            {shareMessage}
           </p>
         ) : null}
 
@@ -187,6 +258,13 @@ export default function DiaryPage() {
                       >
                         下载行程卡
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => shareSavedTrip(savedTrip)}
+                        className="rounded-full bg-orange-400 px-4 py-2 text-xs font-black text-white transition-all hover:bg-orange-300"
+                      >
+                        分享链接
+                      </button>
                       <SocialShareModal
                         tripSummary={savedTrip.plan}
                         buttonClassName="rounded-full bg-gradient-to-r from-orange-400 to-red-400 px-4 py-2 text-xs font-black text-white shadow-lg shadow-orange-500/20 transition-all hover:-translate-y-0.5 hover:shadow-orange-500/30"
@@ -220,6 +298,74 @@ export default function DiaryPage() {
             <p className="mt-2 text-sm text-white/45">在首页生成路线后点击“收藏行程”，这里就会保存下来。</p>
           </div>
         )}
+
+        <section className="mt-8 rounded-3xl border border-white/10 bg-white/[0.06] p-6 text-white backdrop-blur-xl">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
+                Agent Trace
+              </p>
+              <h2 className="mt-2 text-2xl font-black">最近执行记录</h2>
+            </div>
+            <p className="text-sm text-white/45">{agentTraces.length} 条记录</p>
+          </div>
+
+          {agentTraces.length > 0 ? (
+            <div className="mt-5 grid gap-3">
+              {agentTraces.slice(0, 6).map((trace) => (
+                <article
+                  key={trace.id}
+                  className="rounded-2xl border border-white/10 bg-black/25 p-4"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-black">{trace.instruction}</p>
+                      <p className="mt-1 text-xs text-white/40">
+                        {new Date(trace.createdAt).toLocaleString("zh-CN")}
+                      </p>
+                    </div>
+                    <span
+                      className={`rounded-full px-3 py-1.5 text-xs font-black ${
+                        trace.status === "success"
+                          ? "bg-emerald-300/15 text-emerald-200"
+                          : "bg-red-300/15 text-red-100"
+                      }`}
+                    >
+                      {trace.status === "success" ? "SUCCESS" : "FAILED"}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {trace.actions.map((action) => (
+                      <span
+                        key={`${trace.id}-${action.toolName}`}
+                        className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white/60"
+                      >
+                        {action.label}
+                      </span>
+                    ))}
+                  </div>
+
+                  {trace.weatherSummary ? (
+                    <p className="mt-3 text-xs leading-5 text-orange-100/70">
+                      天气工具：{trace.weatherSummary}
+                    </p>
+                  ) : null}
+
+                  {trace.guardrailIssues.length > 0 ? (
+                    <p className="mt-3 text-xs leading-5 text-red-100/80">
+                      Guardrails：{trace.guardrailIssues.join("；")}
+                    </p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-5 rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-white/45">
+              还没有 Agent 执行记录。生成路线后，用 AI 行程管家修改一次就会出现在这里。
+            </p>
+          )}
+        </section>
       </div>
     </div>
   );

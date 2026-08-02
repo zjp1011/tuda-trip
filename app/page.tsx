@@ -3,10 +3,16 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import ItineraryAgentPanel from "../components/ItineraryAgentPanel";
 import PlanDisplay from "../components/PlanDisplay";
 import SocialShareModal from "../components/SocialShareModal";
+import UserMemoryPanel from "../components/UserMemoryPanel";
+import WeatherInsightCard from "../components/WeatherInsightCard";
 import { useUser } from "../hooks/useUser";
 import { downloadTravelPlanHtml } from "../lib/exportTravelPlan";
+import type { SavedTrip } from "../lib/savedTrips";
+import { buildShareUrl, isLocalShareUrl } from "../lib/shareUrl";
+import { defaultUserMemory, type UserMemory } from "../lib/userMemory";
 import type { TravelPlan, TravelPlansResponse } from "../types/travel";
 
 type CompanionType = "单人" | "情侣" | "亲子" | "朋友";
@@ -46,7 +52,11 @@ export default function Home() {
   const [foodPreferences, setFoodPreferences] = useState<string[]>([]);
   const [customFoodPreference, setCustomFoodPreference] = useState("");
   const [plan, setPlan] = useState<TravelPlan | null>(null);
+  const [userMemory, setUserMemory] = useState<UserMemory>(defaultUserMemory);
   const [errorMessage, setErrorMessage] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
+  const [shareMessage, setShareMessage] = useState("");
+  const [hasUnsavedAgentChanges, setHasUnsavedAgentChanges] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
@@ -93,6 +103,9 @@ export default function Home() {
       return;
     }
 
+    setErrorMessage("");
+    setSaveMessage("");
+
     try {
       const response = await fetch("/api/save-route", {
         method: "POST",
@@ -119,7 +132,78 @@ export default function Home() {
       return;
     }
 
+    setHasUnsavedAgentChanges(false);
+    setSaveMessage("已收藏最新版，正在前往我的行程。");
     router.push("/diary");
+  };
+
+  const copyTextToClipboard = async (text: string) => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+  };
+
+  const shareCurrentPlan = async () => {
+    if (!plan) {
+      return;
+    }
+
+    setErrorMessage("");
+    setShareMessage("");
+
+    try {
+      const savedTrip: SavedTrip = {
+        id: crypto.randomUUID(),
+        title: plan.plan_title,
+        destination: destination || "未命名目的地",
+        createdAt: new Date().toISOString(),
+        plan,
+      };
+
+      const response = await fetch("/api/share-route", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ savedTrip }),
+      });
+      const data = (await response.json()) as {
+        sharedRoute?: { id: string };
+        error?: string;
+        details?: string;
+      };
+
+      if (!response.ok || !data.sharedRoute) {
+        throw new Error(data.details ?? data.error ?? "创建分享链接失败");
+      }
+
+      const shareUrl = buildShareUrl(data.sharedRoute.id);
+      await copyTextToClipboard(shareUrl);
+      setShareMessage(
+        isLocalShareUrl(shareUrl)
+          ? "本地分享链接已复制，但 localhost 只能在你这台电脑打开；外发需要先部署或配置公网访问地址。"
+          : "分享链接已复制，可以直接发给朋友查看。",
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "创建分享链接失败");
+    }
+  };
+
+  const updatePlanFromAgent = (nextPlan: TravelPlan, reply: string) => {
+    setPlan(nextPlan);
+    setHasUnsavedAgentChanges(true);
+    setSaveMessage(`${reply} 当前修改尚未收藏。`);
   };
 
   const downloadPlan = () => {
@@ -143,6 +227,7 @@ export default function Home() {
         },
         body: JSON.stringify({
           userId: guestId,
+          userMemoryPreferences: userMemory.preferences,
           destination,
           days: Number(days),
           companion,
@@ -183,6 +268,9 @@ export default function Home() {
       }
 
       setPlan(data.plans[0]);
+      setHasUnsavedAgentChanges(false);
+      setSaveMessage("");
+      setShareMessage("");
       window.setTimeout(() => {
         document.getElementById("generated-plan")?.scrollIntoView({ behavior: "smooth" });
       }, 80);
@@ -382,6 +470,10 @@ export default function Home() {
         </section>
       </form>
 
+      <WeatherInsightCard destination={destination} days={Number(days)} />
+
+      <UserMemoryPanel guestId={guestId} onMemoryChanged={setUserMemory} />
+
       <section className="px-5 pb-10 sm:px-8 lg:px-12">
         <div className="mx-auto grid w-full max-w-6xl gap-4 rounded-3xl border border-white/15 bg-black/40 p-5 shadow-2xl shadow-black/20 backdrop-blur-xl lg:grid-cols-[1.1fr_0.9fr] lg:p-6">
           <div>
@@ -444,16 +536,37 @@ export default function Home() {
                 Generated Route
               </p>
               <h2 className="mt-2 text-3xl font-black">你的专属路线</h2>
+              {saveMessage ? (
+                <p className="mt-3 max-w-xl rounded-2xl border border-orange-200/20 bg-orange-300/10 px-4 py-3 text-sm font-semibold text-orange-100">
+                  {saveMessage}
+                </p>
+              ) : null}
+              {shareMessage ? (
+                <p className="mt-3 max-w-xl rounded-2xl border border-emerald-200/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-100">
+                  {shareMessage}
+                </p>
+              ) : null}
             </div>
 
             <div className="flex flex-wrap gap-3">
               <SocialShareModal tripSummary={plan} />
               <button
                 type="button"
-                onClick={saveCurrentPlan}
-                className="rounded-full bg-white px-5 py-3 text-sm font-black text-slate-950 transition-all hover:-translate-y-0.5 hover:bg-orange-100"
+                onClick={shareCurrentPlan}
+                className="rounded-full bg-orange-400 px-5 py-3 text-sm font-black text-white shadow-xl shadow-orange-500/25 transition-all hover:-translate-y-0.5 hover:bg-orange-300"
               >
-                收藏行程
+                分享链接
+              </button>
+              <button
+                type="button"
+                onClick={saveCurrentPlan}
+                className={`rounded-full px-5 py-3 text-sm font-black transition-all hover:-translate-y-0.5 ${
+                  hasUnsavedAgentChanges
+                    ? "bg-gradient-to-r from-orange-400 to-red-400 text-white shadow-xl shadow-orange-500/30 hover:shadow-2xl hover:shadow-orange-500/40"
+                    : "bg-white text-slate-950 hover:bg-orange-100"
+                }`}
+              >
+                {hasUnsavedAgentChanges ? "收藏最新版" : "收藏行程"}
               </button>
               <button
                 type="button"
@@ -464,6 +577,13 @@ export default function Home() {
               </button>
             </div>
           </div>
+          <ItineraryAgentPanel
+            userId={guestId}
+            plan={plan}
+            destination={destination}
+            memoryPreferences={userMemory.preferences}
+            onPlanUpdated={updatePlanFromAgent}
+          />
           <PlanDisplay plan={plan} />
         </section>
       ) : null}
