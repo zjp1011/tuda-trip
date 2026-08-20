@@ -4,6 +4,11 @@
 
 这个项目不只是一个普通的 Prompt 调用页面，而是围绕“旅行规划 Agent”做了工具调用、长期记忆、结果校验、执行轨迹和用户数据隔离等能力，适合作为 AI Agent 方向的作品集项目继续扩展。
 
+## 项目演示
+
+- 演示视频：[点击观看 / 下载](https://github.com/zjp1011/tuda-trip/releases/download/demo-video-2026-08-20/2026-08-20.170639.mp4)
+- Release 页面：[demo-video-2026-08-20](https://github.com/zjp1011/tuda-trip/releases/tag/demo-video-2026-08-20)
+
 ## 项目亮点
 
 - AI 生成多日旅行路线，返回统一的结构化 JSON 行程数据
