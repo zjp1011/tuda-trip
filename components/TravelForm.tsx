@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import type { TravelPlan, TravelPlansResponse } from "../types/travel";
+import { useDeepSeekRequest } from "./DeepSeekKey";
 
 type CompanionType = "单人" | "情侣" | "亲子" | "朋友";
 type BudgetPreference = "经济实惠" | "舒适预算" | "品质享受" | "不设上限";
@@ -49,6 +50,7 @@ interface TravelFormProps {
 }
 
 export default function TravelForm({ onPlanGenerated }: TravelFormProps) {
+  const requestDeepSeek = useDeepSeekRequest();
   const [destination, setDestination] = useState("");
   const [days, setDays] = useState(3);
   const [companion, setCompanion] = useState<CompanionType>("朋友");
@@ -108,21 +110,15 @@ export default function TravelForm({ onPlanGenerated }: TravelFormProps) {
     setErrorMessage("");
 
     try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          destination,
-          days,
-          companion,
-          budgetPreference,
-          customBudget,
-          travelStyles,
-          foodPreferences,
-          customFoodPreference,
-        }),
+      const response = await requestDeepSeek("generate", {
+        destination,
+        days,
+        companion,
+        budgetPreference,
+        customBudget,
+        travelStyles,
+        foodPreferences,
+        customFoodPreference,
       });
 
       const responseText = await response.text();

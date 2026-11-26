@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useDeepSeekRequest } from "./DeepSeekKey";
 
 type SharePlatform = "xiaohongshu" | "moments";
 
@@ -18,6 +19,7 @@ const platformTabs: Array<{
 ];
 
 export default function SocialShareModal({ tripSummary, buttonClassName }: SocialShareModalProps) {
+  const requestDeepSeek = useDeepSeekRequest();
   const [isOpen, setIsOpen] = useState(false);
   const [platform, setPlatform] = useState<SharePlatform>("xiaohongshu");
   const [copyText, setCopyText] = useState("");
@@ -55,15 +57,9 @@ export default function SocialShareModal({ tripSummary, buttonClassName }: Socia
     setPlatform(nextPlatform);
 
     try {
-      const response = await fetch("/api/generate-copy", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          platform: nextPlatform,
-          tripSummary,
-        }),
+      const response = await requestDeepSeek("copy", {
+        platform: nextPlatform,
+        tripSummary,
       });
 
       const responseText = await response.text();

@@ -7,9 +7,10 @@ const origin = process.env.TUDA_PUBLIC_ORIGIN;
 const password = process.env.TUDA_INVITE_PASSWORD;
 assert.ok(origin && password, "Configure the isolated test instance before running the test.");
 
-function request(path, { method = "GET", body, cookie, requestOrigin = origin } = {}) {
+function request(path, { method = "GET", body, cookie, authorization, requestOrigin = origin } = {}) {
   const headers = {};
   if (cookie) headers.Cookie = cookie;
+  if (authorization) headers.Authorization = authorization;
   if (body !== undefined) {
     headers.Origin = requestOrigin;
     headers["Content-Type"] = "application/json";
@@ -35,7 +36,7 @@ async function signIn() {
 
 const health = await request("/api/health");
 assert.equal(health.status, 200);
-assert.equal((await health.json()).generationConfigured, false, "The smoke instance must omit a live model key.");
+assert.equal((await health.json()).generationMode, "byok");
 assert.match(await (await request("/")).text(), /途搭内测/);
 assert.equal((await request("/api/save-route?userId=" + randomUUID())).status, 401);
 assert.equal((await request("/api/generate", { method: "POST", body: {} })).status, 401);
@@ -66,11 +67,6 @@ for (const [index, cookie] of [first, second].entries()) {
 }
 
 const payload = { destination: "成都", days: 3, companion: "朋友" };
-assert.equal((await request("/api/generate", { method: "POST", body: payload, cookie: first })).status, 503);
-assert.equal((await request("/api/generate", {
-  method: "POST", body: { ...payload, destination: "a".repeat(16_384) }, cookie: first,
-})).status, 413);
-
 const plan = {
   plan_id: "example",
   plan_title: "内测样例行程",
@@ -84,6 +80,44 @@ const plan = {
     accommodation: { area_recommendation: "市区", reason: "交通方便" },
   }],
 };
+const paidRequests = [
+  ["/api/generate", payload],
+  ["/api/refine-route", { currentPlan: plan, instruction: "放松一点", destination: "成都" }],
+  ["/api/generate-copy", { tripSummary: "成都散步", platform: "moments" }],
+];
+for (const [endpoint, body] of paidRequests) {
+  const missing = await request(endpoint, { method: "POST", body, cookie: first });
+  assert.equal(missing.status, 400, endpoint);
+  assert.equal((await missing.json()).code, "deepseek_key_required");
+  const malformed = await request(endpoint, {
+    method: "POST", body, cookie: first, authorization: "Bearer malformed key",
+  });
+  assert.equal(malformed.status, 401, endpoint);
+  assert.equal((await malformed.json()).code, "deepseek_key_invalid");
+}
+assert.equal((await request("/api/generate", {
+  method: "POST", body: { ...payload, destination: "a".repeat(16_384) }, cookie: first,
+  authorization: "Bearer sk-synthetic-overflow-check",
+})).status, 413);
+
+if (process.env.TUDA_SMOKE_MOCK_UPSTREAMS === "1") {
+  const invoke = (endpoint, body, key, cookie = first) =>
+    request(endpoint, { method: "POST", body, cookie, authorization: `Bearer ${key}` });
+  for (const [endpoint, body] of paidRequests) {
+    const response = await invoke(endpoint, body, "sk-byok-test-good");
+    assert.equal(response.status, 200, endpoint);
+    assert.match(JSON.stringify(await response.json()), /BYOK 模拟/);
+  }
+  const rejected = await invoke("/api/generate-copy", paidRequests[2][1], "sk-byok-test-bad");
+  assert.equal(rejected.status, 401);
+  const rejectedBody = await rejected.json();
+  assert.equal(rejectedBody.code, "deepseek_key_invalid");
+  assert.doesNotMatch(rejectedBody.error, /sk-byok-test|untrusted upstream/);
+  const fare = await invoke("/api/generate-copy", paidRequests[2][1], "sk-byok-test-no-balance", second);
+  assert.equal(fare.status, 402);
+  assert.equal((await fare.json()).code, "deepseek_balance_required");
+}
+
 const share = await request("/api/share-route", {
   method: "POST",
   body: { savedTrip: { id: randomUUID(), title: "内测样例行程", destination: "成都", plan } },
@@ -103,4 +137,4 @@ for (let attempt = 0; attempt < 17; attempt++) {
 }
 assert.ok(loginStatuses.has(401));
 assert.ok(loginStatuses.has(429));
-console.log("内测入口、登录限流、同源校验、会话隔离、请求上限和公开分享验证通过。");
+console.log("内测入口、BYOK 保护、同源校验、会话隔离、请求上限和公开分享验证通过。");

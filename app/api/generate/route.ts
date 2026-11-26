@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { claimPaidRequest, getDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
+import { callDeepSeek, claimPaidRequest, deepSeekCacheScope, readDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
 import { isRenderableTravelPlan } from "../../../lib/travelPlanGuardrails";
 import { generateEmbedding } from "../../../lib/openai";
 import { formatUserMemoryForPrompt, normalizeMemoryPreferences } from "../../../lib/userMemory";
@@ -36,7 +36,6 @@ type NormalizedGenerateRequest = {
 
 type TravelCacheMetadata = {
   travelPlanJson?: string;
-  cacheKeyText?: string;
   createdAt?: string;
 };
 
@@ -181,18 +180,20 @@ function parseCachedTravelPlan(metadata: TravelCacheMetadata | undefined) {
   }
 
   try {
-    return JSON.parse(metadata.travelPlanJson) as TravelPlansResponse;
-  } catch (error) {
-    console.warn("Cached travel plan JSON parse failed:", error);
+    const parsed = JSON.parse(metadata.travelPlanJson) as TravelPlansResponse;
+    return Array.isArray(parsed?.plans) && parsed.plans.length > 0 &&
+      parsed.plans.every(isRenderableTravelPlan) ? parsed : null;
+  } catch {
+    console.warn("Cached travel plan JSON parse failed.");
     return null;
   }
 }
 
-async function queryTravelPlanCache(embedding: number[]) {
+async function queryTravelPlanCache(scope: string, embedding: number[]) {
   try {
     const { vectorIndex } = await import("../../../lib/upstash");
     const results = await withTimeout(
-      vectorIndex.query<TravelCacheMetadata>({
+      vectorIndex.namespace(scope).query<TravelCacheMetadata>({
         vector: embedding,
         topK: 1,
         includeMetadata: true,
@@ -226,37 +227,10 @@ async function generateTravelPlanWithLLM(
   weather: DestinationWeather | null,
   apiKey: string,
 ) {
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    signal: AbortSignal.timeout(75_000),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.DEEPSEEK_MODEL || "deepseek-flash",
-      messages: [
-        {
-          role: "system",
-          content: "你是一个资深旅行规划师。你必须输出能被 JSON.parse 解析的 JSON。",
-        },
-        {
-          role: "user",
-          content: buildUserPrompt(body, weather),
-        },
-      ],
-      response_format: { type: "json_object" },
-      thinking: { type: "disabled" },
-      max_tokens: 4000,
-      stream: false,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new RequestError(502, "AI 生成服务暂不可用。");
-  }
-
-  const completion = await response.json();
+  const completion = await callDeepSeek(apiKey, [
+    { role: "system", content: "你是一个资深旅行规划师。你必须输出能被 JSON.parse 解析的 JSON。" },
+    { role: "user", content: buildUserPrompt(body, weather) },
+  ], { timeout: 75_000, maxTokens: 4000, json: true });
   const outputText =
     typeof completion === "object" &&
     completion !== null &&
@@ -279,19 +253,18 @@ async function generateTravelPlanWithLLM(
 }
 
 async function upsertTravelPlanCache(
+  scope: string,
   embedding: number[],
-  cacheKeyText: string,
   travelPlan: TravelPlansResponse,
 ) {
   try {
     const { vectorIndex } = await import("../../../lib/upstash");
     await withTimeout(
-      vectorIndex.upsert<TravelCacheMetadata>({
+      vectorIndex.namespace(scope).upsert<TravelCacheMetadata>({
         id: crypto.randomUUID(),
         vector: embedding,
         metadata: {
           travelPlanJson: JSON.stringify(travelPlan),
-          cacheKeyText,
           createdAt: new Date().toISOString(),
         },
       }),
@@ -308,6 +281,7 @@ export async function POST(request: Request) {
   try {
     const user = requestUser(request);
     requireSameOrigin(request);
+    const apiKey = readDeepSeekKey(request);
     const body = await readJson<GenerateRequestBody>(request, 16 * 1024);
     const normalizedBody = normalizeRequestBody(body);
 
@@ -318,7 +292,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const apiKey = getDeepSeekKey();
     release = await claimPaidRequest(user);
     let weather: DestinationWeather | null = null;
 
@@ -328,13 +301,16 @@ export async function POST(request: Request) {
       console.warn("Weather service unavailable, continuing without forecast.");
     }
 
-    if (process.env.UPSTASH_VECTOR_REST_URL && process.env.UPSTASH_VECTOR_REST_TOKEN) {
+    const scope = process.env.UPSTASH_VECTOR_REST_URL && process.env.UPSTASH_VECTOR_REST_TOKEN
+      ? deepSeekCacheScope(user, apiKey)
+      : null;
+    if (scope) {
       const cacheKeyText = buildCacheKeyText(normalizedBody, weather);
       const embedding = await generateEmbedding(cacheKeyText);
-      const cachedTravelPlan = await queryTravelPlanCache(embedding);
+      const cachedTravelPlan = await queryTravelPlanCache(scope, embedding);
       if (cachedTravelPlan) return NextResponse.json(cachedTravelPlan);
       const travelPlan = await generateTravelPlanWithLLM(normalizedBody, weather, apiKey);
-      await upsertTravelPlanCache(embedding, cacheKeyText, travelPlan);
+      await upsertTravelPlanCache(scope, embedding, travelPlan);
       return NextResponse.json(travelPlan);
     }
     return NextResponse.json(await generateTravelPlanWithLLM(normalizedBody, weather, apiKey));

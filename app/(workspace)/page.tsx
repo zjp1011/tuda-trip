@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useDeepSeekRequest } from "@/components/DeepSeekKey";
 import ItineraryAgentPanel from "@/components/ItineraryAgentPanel";
 import PlanDisplay from "@/components/PlanDisplay";
 import SocialShareModal from "@/components/SocialShareModal";
@@ -42,6 +43,7 @@ const destinations = [
 
 export default function Home() {
   const router = useRouter();
+  const requestDeepSeek = useDeepSeekRequest();
   const { guestId } = useUser();
   const [destination, setDestination] = useState("");
   const [days, setDays] = useState("3");
@@ -220,23 +222,17 @@ export default function Home() {
     setErrorMessage("");
 
     try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          userId: guestId,
-          userMemoryPreferences: userMemory.preferences,
-          destination,
-          days: Number(days),
-          companion,
-          budgetPreference,
-          customBudget,
-          travelStyles,
-          foodPreferences,
-          customFoodPreference,
-        }),
+      const response = await requestDeepSeek("generate", {
+        userId: guestId,
+        userMemoryPreferences: userMemory.preferences,
+        destination,
+        days: Number(days),
+        companion,
+        budgetPreference,
+        customBudget,
+        travelStyles,
+        foodPreferences,
+        customFoodPreference,
       });
 
       const responseText = await response.text();

@@ -12,7 +12,7 @@
 ## 项目亮点
 
 - AI 生成多日旅行路线，返回统一的结构化 JSON 行程数据
-- DeepSeek / SiliconFlow 大模型接口，支持低成本文本生成
+- 使用自己的 DeepSeek Key 生成行程、修改行程和生成分享文案
 - Upstash Vector 语义缓存，减少相似需求的重复模型调用
 - 天气工具调用，根据目的地天气调整室内外行程节奏
 - 用户长期记忆，保存偏好并参与后续路线生成和修改
@@ -78,7 +78,7 @@ types/               旅行计划 TypeScript 类型
 - TypeScript
 - Tailwind CSS
 - Upstash Vector
-- DeepSeek / SiliconFlow API
+- DeepSeek API
 - Open-Meteo 天气 API
 - 服务端签名会话
 - 本地 `.data/*.json` 文件存储
@@ -97,19 +97,6 @@ npm ci
 cp .env.local.example .env.local
 ```
 
-填写 `.env.local`：
-
-```env
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-DEEPSEEK_MODEL=deepseek-flash
-SILICONFLOW_API_KEY=your_siliconflow_api_key_here
-SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3
-VECTOR_DIMENSION=1536
-UPSTASH_VECTOR_REST_URL=your_upstash_vector_rest_url_here
-UPSTASH_VECTOR_REST_TOKEN=your_upstash_vector_rest_token_here
-NEXT_PUBLIC_SHARE_BASE_URL=http://localhost:3000
-```
-
 启动开发环境：
 
 ```bash
@@ -122,6 +109,8 @@ npm run dev
 http://localhost:3000
 ```
 
+使用 AI 功能时，在页面填写自己的 DeepSeek Key。途搭把 Key 放在对应请求的鉴权头中，由服务端转发给 DeepSeek。Key 保留在当前页面会话内，刷新页面或清除后需要重新填写。
+
 类型检查：
 
 ```bash
@@ -132,10 +121,7 @@ npx tsc --noEmit
 
 | 变量名 | 说明 |
 | --- | --- |
-| `DEEPSEEK_API_KEY` | DeepSeek API Key |
 | `DEEPSEEK_MODEL` | DeepSeek 文本生成模型 |
-| `SILICONFLOW_API_KEY` | 硅基流动 API Key |
-| `SILICONFLOW_MODEL` | 硅基流动模型名称 |
 | `VECTOR_DIMENSION` | 语义缓存向量维度 |
 | `UPSTASH_VECTOR_REST_URL` | Upstash Vector REST URL |
 | `UPSTASH_VECTOR_REST_TOKEN` | Upstash Vector REST Token |
@@ -201,7 +187,7 @@ npm run dev
 -> 生成向量
 -> 查询 Upstash Vector 语义缓存
 -> 命中则直接返回历史行程
--> 未命中则调用 DeepSeek / SiliconFlow
+-> 使用访客填写的 Key 调用 DeepSeek
 -> 解析结构化 JSON
 -> 写入语义缓存
 -> 前端展示行程
@@ -247,7 +233,7 @@ npm run dev
 
 生产部署的入口为 `trip.yayapeng.xyz`。GitHub Actions 在 Linux 构建 Next.js standalone 包。Caddy 通过本机端口访问独立的 `tuda-trip.service`，用户数据存放在 `/var/lib/tuda-trip`。
 
-首次接入由服务器管理员运行 `ops/bootstrap-trip-deploy.sh`，传入专用部署公钥和仅管理员可读的运行环境文件。该文件保存于 `/etc/tuda-trip/runtime.env`。启用模型前配置 `DEEPSEEK_API_KEY`，向量缓存可按需配置。模型 Key 和会话签名密钥在服务器上输入并保管。
+首次接入由服务器管理员运行 `ops/bootstrap-trip-deploy.sh`，传入专用部署公钥和仅管理员可读的运行环境文件。该文件保存于 `/etc/tuda-trip/runtime.env`，用于内测口令、会话签名密钥和服务配置。访问者在页面填写的 DeepSeek Key 随本次 AI 请求使用。向量缓存可按需配置。
 
 在仓库 Actions Secrets 配置 `DEPLOY_SSH_KEY` 和 `DEPLOY_KNOWN_HOSTS`。首次从 `main` 手动运行发布并验证 `/api/health`、首页及内测登录，随后可将仓库变量 `DEPLOY_ENABLED` 设为 `true`，让以后的 `main` 推送自动部署。手动运行时填写 `rollback_release` 可恢复服务器已保留的提交版本。
 

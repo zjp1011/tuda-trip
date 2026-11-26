@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { analyzeTravelPlan, type AgentToolAction } from "../lib/travelPlanTools";
 import type { TravelPlan } from "../types/travel";
+import { useDeepSeekRequest } from "./DeepSeekKey";
 
 type AgentMessage = {
   role: "user" | "assistant";
@@ -34,6 +35,7 @@ export default function ItineraryAgentPanel({
   memoryPreferences = [],
   onPlanUpdated,
 }: ItineraryAgentPanelProps) {
+  const requestDeepSeek = useDeepSeekRequest();
   const toolReport = analyzeTravelPlan(plan);
   const [instruction, setInstruction] = useState("");
   const [messages, setMessages] = useState<AgentMessage[]>([
@@ -62,18 +64,12 @@ export default function ItineraryAgentPanel({
     ]);
 
     try {
-      const response = await fetch("/api/refine-route", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          userId,
-          currentPlan: plan,
-          destination,
-          instruction: trimmedInstruction,
-          userMemoryPreferences: memoryPreferences,
-        }),
+      const response = await requestDeepSeek("refine", {
+        userId,
+        currentPlan: plan,
+        destination,
+        instruction: trimmedInstruction,
+        userMemoryPreferences: memoryPreferences,
       });
 
       const responseText = await response.text();

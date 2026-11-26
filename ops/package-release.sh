@@ -46,6 +46,7 @@ PYTHON
 revision=${GITHUB_SHA:-0000000000000000000000000000000000000000}
 origin=https://trip.yayapeng.xyz
 invite_password=fake-ci-invite-password
+mock_upstreams="$PWD/tests/mock-upstreams.mjs"
 mkdir -m 700 "$work/data"
 (
   cd "$work/release"
@@ -53,20 +54,21 @@ mkdir -m 700 "$work/data"
   export TUDA_PUBLIC_ORIGIN="$origin" TUDA_DATA_DIR="$work/data"
   export TUDA_RELEASE_SHA="$revision"
   export TUDA_INVITE_PASSWORD="$invite_password" TUDA_SESSION_SECRET=fake-ci-session-secret-not-for-serving
-  unset DEEPSEEK_API_KEY SILICONFLOW_API_KEY
-  exec node server.js
+  export TUDA_SMOKE_MOCK_UPSTREAMS=1
+  export DEEPSEEK_API_KEY=obsolete-ci-deepseek-fixture SILICONFLOW_API_KEY=obsolete-ci-siliconflow-fixture
+  exec node --import "$mock_upstreams" server.js
 ) > "$work/service.log" 2>&1 &
 process=$!
 
 for attempt in {1..15}; do
   if curl --disable --noproxy '*' --silent --fail --max-time 2 \
       http://127.0.0.1:4192/api/health -o "$work/health" &&
-    python3 -c 'import json, sys; data=json.load(open(sys.argv[1])); sys.exit(not (data["ok"] is True and data["commit"] == sys.argv[2]))' \
+    python3 -c 'import json, sys; data=json.load(open(sys.argv[1])); sys.exit(not (data.get("ok") is True and data.get("commit") == sys.argv[2] and data.get("generationMode") == "byok"))' \
       "$work/health" "$revision" &&
     curl --disable --noproxy '*' --silent --fail --max-time 2 http://127.0.0.1:4192/ -o "$work/home" &&
     test -s "$work/home"; then
-    echo '发布包可独立启动，首页和健康检查通过。'
-    TUDA_PUBLIC_ORIGIN="$origin" TUDA_INVITE_PASSWORD="$invite_password" \
+    echo '发布包可独立启动，首页和自带 Key 模式通过验证。'
+    TUDA_PUBLIC_ORIGIN="$origin" TUDA_INVITE_PASSWORD="$invite_password" TUDA_SMOKE_MOCK_UPSTREAMS=1 \
       node tests/access-smoke.mjs http://127.0.0.1:4192
     exit 0
   fi

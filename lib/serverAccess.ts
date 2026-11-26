@@ -13,7 +13,7 @@ const runtime = globalThis as typeof globalThis & {
 };
 
 export class RequestError extends Error {
-  constructor(public status: number, message: string, public retryAfter?: number) {
+  constructor(public status: number, message: string, public retryAfter?: number, public code?: string) {
     super(message);
   }
 }
@@ -221,13 +221,74 @@ export async function readJson<T>(request: Request, limit = MAX_JSON_BYTES): Pro
 export function requestFailure(error: unknown, fallback: string) {
   if (error instanceof RequestError) {
     const headers = error.retryAfter ? { "Retry-After": String(error.retryAfter) } : undefined;
-    return NextResponse.json({ error: error.message }, { status: error.status, headers });
+    const data = { error: error.message, ...(error.code ? { code: error.code } : {}) };
+    return NextResponse.json(data, { status: error.status, headers });
   }
   return NextResponse.json({ error: fallback }, { status: 500 });
 }
 
-export function getDeepSeekKey() {
-  const key = process.env.DEEPSEEK_API_KEY?.trim();
-  if (!key) throw new RequestError(503, "AI 生成服务待配置。");
+export function readDeepSeekKey(request: Request) {
+  const authorization = request.headers.get("authorization");
+  if (!authorization) {
+    throw new RequestError(400, "请先填写自己的 DeepSeek API Key。", undefined, "deepseek_key_required");
+  }
+  const key = /^Bearer ([A-Za-z0-9._~+\/-]+=*)$/i.exec(authorization)?.[1];
+  if (!key || key.length > 512) {
+    throw new RequestError(401, "DeepSeek API Key 格式有误，请重新填写。", undefined, "deepseek_key_invalid");
+  }
   return key;
+}
+
+export function deepSeekCacheScope(user: string | null, apiKey: string) {
+  const settings = getInviteSettings();
+  if (!user || !settings) return null;
+  return createHmac("sha256", settings.secret)
+    .update("tuda-byok-cache-v1\0").update(user).update("\0").update(apiKey)
+    .digest("hex").slice(0, 32);
+}
+
+type DeepSeekMessage = { role: "system" | "user"; content: string };
+
+export async function callDeepSeek(
+  apiKey: string,
+  messages: DeepSeekMessage[],
+  options: { timeout: number; maxTokens: number; json?: boolean },
+): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      signal: AbortSignal.timeout(options.timeout),
+      redirect: "error",
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: process.env.DEEPSEEK_MODEL || "deepseek-flash",
+        messages,
+        thinking: { type: "disabled" },
+        max_tokens: options.maxTokens,
+        stream: false,
+        ...(options.json ? { response_format: { type: "json_object" } } : {}),
+      }),
+    });
+  } catch {
+    throw new RequestError(502, "无法连接 DeepSeek，请稍后再试。");
+  }
+  if (response.ok) {
+    return response.json().catch(() => {
+      throw new RequestError(502, "DeepSeek 返回的数据无效，请稍后再试。");
+    });
+  }
+
+  void response.body?.cancel().catch(() => {});
+  if (response.status === 401 || response.status === 403) {
+    throw new RequestError(401, "DeepSeek API Key 无效或权限不足，请检查后重试。", undefined, "deepseek_key_invalid");
+  }
+  if (response.status === 402) {
+    throw new RequestError(402, "DeepSeek 账户余额不足，请检查账户后重试。", undefined, "deepseek_balance_required");
+  }
+  if (response.status === 429) {
+    throw new RequestError(429, "DeepSeek 暂时限制了调用频率，请稍后再试。", 60, "deepseek_rate_limited");
+  }
+  throw new RequestError(502, "DeepSeek 暂不可用，请稍后再试。");
 }

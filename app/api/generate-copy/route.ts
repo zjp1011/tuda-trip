@@ -1,18 +1,11 @@
 import { NextResponse } from "next/server";
-import { claimPaidRequest, getDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
+import { callDeepSeek, claimPaidRequest, readDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
 
 type CopyPlatform = "xiaohongshu" | "moments";
 
 type GenerateCopyRequestBody = {
   tripSummary?: string | Record<string, unknown>;
   platform?: CopyPlatform;
-};
-
-type LLMProviderConfig = {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  providerName: string;
 };
 
 const systemPrompts: Record<CopyPlatform, string> = {
@@ -48,26 +41,6 @@ function normalizeTripSummary(tripSummary: GenerateCopyRequestBody["tripSummary"
   return "";
 }
 
-function getLLMProviderConfig(): LLMProviderConfig {
-  const siliconFlowApiKey = process.env.SILICONFLOW_API_KEY?.trim();
-
-  if (siliconFlowApiKey) {
-    return {
-      apiKey: siliconFlowApiKey,
-      baseUrl: "https://api.siliconflow.cn/v1/chat/completions",
-      model: process.env.SILICONFLOW_MODEL ?? "deepseek-ai/DeepSeek-V3",
-      providerName: "SiliconFlow",
-    };
-  }
-
-  return {
-    apiKey: getDeepSeekKey(),
-    baseUrl: "https://api.deepseek.com/chat/completions",
-    model: process.env.DEEPSEEK_MODEL || "deepseek-flash",
-    providerName: "DeepSeek",
-  };
-}
-
 function extractCopyText(data: unknown) {
   if (typeof data !== "object" || data === null || !("choices" in data)) {
     return "";
@@ -88,6 +61,7 @@ export async function POST(request: Request) {
   try {
     const user = requestUser(request);
     requireSameOrigin(request);
+    const apiKey = readDeepSeekKey(request);
     const body = await readJson<GenerateCopyRequestBody>(request);
     const platform = body.platform;
     const tripSummary = normalizeTripSummary(body.tripSummary);
@@ -106,45 +80,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const providerConfig = getLLMProviderConfig();
     release = await claimPaidRequest(user);
-    const response = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      signal: AbortSignal.timeout(35_000),
-      headers: {
-        Authorization: `Bearer ${providerConfig.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: providerConfig.model,
-        messages: [
-          {
-            role: "system",
-            content: systemPrompts[platform],
-          },
-          {
-            role: "user",
-            content: `【旅行行程信息】\n${tripSummary}`,
-          },
-        ],
-        max_tokens: platform === "xiaohongshu" ? 1200 : 300,
-        stream: false,
-        ...(providerConfig.providerName === "DeepSeek" ? { thinking: { type: "disabled" } } : {}),
-      }),
-    });
-
-    if (!response.ok) {
-      throw new RequestError(502, "AI 生成服务暂不可用。");
-    }
-
-    const data = await response.json();
+    const data = await callDeepSeek(apiKey, [
+      { role: "system", content: systemPrompts[platform] },
+      { role: "user", content: `【旅行行程信息】\n${tripSummary}` },
+    ], { timeout: 35_000, maxTokens: platform === "xiaohongshu" ? 1200 : 300 });
     const copy = extractCopyText(data);
 
     if (!copy) {
-      return NextResponse.json(
-        { error: `${providerConfig.providerName} returned an empty copy response.` },
-        { status: 502 },
-      );
+      throw new RequestError(502, "DeepSeek 返回的文案为空，请重试。");
     }
 
     return NextResponse.json({ copy });

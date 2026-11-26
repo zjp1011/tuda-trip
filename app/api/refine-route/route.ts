@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { claimPaidRequest, getDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
+import { callDeepSeek, claimPaidRequest, readDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
 import {
   createAgentTrace,
   getAgentTraces,
@@ -112,43 +112,13 @@ async function refineRouteWithLLM(
   executionContext: AgentExecutionContext,
   apiKey: string,
 ) {
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    signal: AbortSignal.timeout(75_000),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+  const completion = await callDeepSeek(apiKey, [
+    {
+      role: "system",
+      content: "你是一个可靠的旅行规划 Agent，擅长基于已有结构化行程进行局部修改。你必须输出能被 JSON.parse 解析的 JSON。",
     },
-    body: JSON.stringify({
-      model: process.env.DEEPSEEK_MODEL || "deepseek-flash",
-      messages: [
-        {
-          role: "system",
-          content:
-            "你是一个可靠的旅行规划 Agent，擅长基于已有结构化行程进行局部修改。你必须输出能被 JSON.parse 解析的 JSON。",
-        },
-        {
-          role: "user",
-          content: buildRefinePrompt(
-            currentPlan,
-            instruction,
-            userMemoryPreferences,
-            executionContext,
-          ),
-        },
-      ],
-      response_format: { type: "json_object" },
-      thinking: { type: "disabled" },
-      max_tokens: 4000,
-      stream: false,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new RequestError(502, "AI 生成服务暂不可用。");
-  }
-
-  const completion = await response.json();
+    { role: "user", content: buildRefinePrompt(currentPlan, instruction, userMemoryPreferences, executionContext) },
+  ], { timeout: 75_000, maxTokens: 4000, json: true });
   const outputText =
     typeof completion === "object" &&
     completion !== null &&
@@ -220,9 +190,11 @@ export async function POST(request: Request) {
     | null = null;
 
   try {
+    const session = requestUser(request);
     requireSameOrigin(request);
+    const apiKey = readDeepSeekKey(request);
     const body = await readJson<RefineRouteRequestBody>(request);
-    const userId = requestUser(request, body.userId) ?? undefined;
+    const userId = session ?? requestUser(request, body.userId) ?? undefined;
     const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
 
     if (!isRenderableTravelPlan(body.currentPlan)) {
@@ -236,7 +208,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "instruction is required." }, { status: 400 });
     }
 
-    const apiKey = getDeepSeekKey();
     release = await claimPaidRequest(userId ?? null);
     const userMemoryPreferences = normalizeMemoryPreferences(body.userMemoryPreferences);
     const toolReport = analyzeTravelPlan(body.currentPlan);

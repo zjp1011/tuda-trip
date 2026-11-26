@@ -140,7 +140,8 @@ jobs:
               --max-filesize 262144 -H 'Cache-Control: no-cache' -w '%{response_code}')
             status=$(curl "${options[@]}" -o "$ssh_dir/health" "https://trip.yayapeng.xyz/api/health") || return 1
             [[ "$status" == 200 ]] || return 1
-            jq -e --arg release "$RELEASE" '.ok == true and .commit == $release' "$ssh_dir/health" > /dev/null || return 1
+            jq -e --arg release "$RELEASE" \
+              '.ok == true and .commit == $release and .generationMode == "byok"' "$ssh_dir/health" > /dev/null || return 1
             status=$(curl "${options[@]}" -o "$ssh_dir/home" "https://trip.yayapeng.xyz/") || return 1
             [[ "$status" == 200 && -s "$ssh_dir/home" ]]
           }
@@ -156,10 +157,7 @@ jobs:
           fi
 
           if verify_public; then
-            echo "途搭公网验证通过。版本 $RELEASE。" >> "$GITHUB_STEP_SUMMARY"
-            if ! jq -e '.generationConfigured == true' "$ssh_dir/health" > /dev/null; then
-              echo '服务尚未配置行程生成。' >> "$GITHUB_STEP_SUMMARY"
-            fi
+            echo "途搭公网验证通过，生成使用用户自己的 Key。版本 $RELEASE。" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -167,7 +165,7 @@ jobs:
           if [[ "$previous" == "$RELEASE" ]]; then
             echo '服务器仍在运行发布前的版本。' >> "$GITHUB_STEP_SUMMARY"
           elif [[ "$previous" == none ]]; then
-            echo '首个版本的本机验证已通过。请核对 HTTPS 和域名解析后重试。' >> "$GITHUB_STEP_SUMMARY"
+            echo '首个版本的本机验证已通过。请核对公网入口和自带 Key 模式后重试。' >> "$GITHUB_STEP_SUMMARY"
           elif current=$(active_release) && [[ "$current" == "$RELEASE" ]] &&
             ssh "${ssh_flags[@]}" "$target" "rollback $previous" < /dev/null; then
             echo "途搭已恢复到发布前的版本 $previous。" >> "$GITHUB_STEP_SUMMARY"
