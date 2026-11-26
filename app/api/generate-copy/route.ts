@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { claimPaidRequest, getDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
 
 type CopyPlatform = "xiaohongshu" | "moments";
 
@@ -48,7 +49,7 @@ function normalizeTripSummary(tripSummary: GenerateCopyRequestBody["tripSummary"
 }
 
 function getLLMProviderConfig(): LLMProviderConfig {
-  const siliconFlowApiKey = process.env.SILICONFLOW_API_KEY;
+  const siliconFlowApiKey = process.env.SILICONFLOW_API_KEY?.trim();
 
   if (siliconFlowApiKey) {
     return {
@@ -59,16 +60,10 @@ function getLLMProviderConfig(): LLMProviderConfig {
     };
   }
 
-  const deepSeekApiKey = process.env.DEEPSEEK_API_KEY;
-
-  if (!deepSeekApiKey) {
-    throw new Error("Missing environment variable: DEEPSEEK_API_KEY or SILICONFLOW_API_KEY");
-  }
-
   return {
-    apiKey: deepSeekApiKey,
+    apiKey: getDeepSeekKey(),
     baseUrl: "https://api.deepseek.com/chat/completions",
-    model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash",
+    model: process.env.DEEPSEEK_MODEL || "deepseek-flash",
     providerName: "DeepSeek",
   };
 }
@@ -89,8 +84,11 @@ function extractCopyText(data: unknown) {
 }
 
 export async function POST(request: Request) {
+  let release: (() => void) | undefined;
   try {
-    const body = (await request.json()) as GenerateCopyRequestBody;
+    const user = requestUser(request);
+    requireSameOrigin(request);
+    const body = await readJson<GenerateCopyRequestBody>(request);
     const platform = body.platform;
     const tripSummary = normalizeTripSummary(body.tripSummary);
 
@@ -101,7 +99,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!tripSummary) {
+    if (!tripSummary || tripSummary.length > 36_000) {
       return NextResponse.json(
         { error: "tripSummary is required." },
         { status: 400 },
@@ -109,8 +107,10 @@ export async function POST(request: Request) {
     }
 
     const providerConfig = getLLMProviderConfig();
+    release = await claimPaidRequest(user);
     const response = await fetch(providerConfig.baseUrl, {
       method: "POST",
+      signal: AbortSignal.timeout(35_000),
       headers: {
         Authorization: `Bearer ${providerConfig.apiKey}`,
         "Content-Type": "application/json",
@@ -129,18 +129,12 @@ export async function POST(request: Request) {
         ],
         max_tokens: platform === "xiaohongshu" ? 1200 : 300,
         stream: false,
+        ...(providerConfig.providerName === "DeepSeek" ? { thinking: { type: "disabled" } } : {}),
       }),
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      return NextResponse.json(
-        {
-          error: `${providerConfig.providerName} API request failed.`,
-          details: errorText,
-        },
-        { status: response.status },
-      );
+      throw new RequestError(502, "AI 生成服务暂不可用。");
     }
 
     const data = await response.json();
@@ -155,12 +149,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ copy });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: "Failed to generate social media copy.",
-        details: error instanceof Error ? error.message : "Unknown server error.",
-      },
-      { status: 500 },
-    );
+    return requestFailure(error, "暂时无法生成分享文案。");
+  } finally {
+    release?.();
   }
 }

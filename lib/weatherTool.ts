@@ -126,7 +126,7 @@ export async function getDestinationWeather(destination: string, forecastDays = 
   geocodingUrl.searchParams.set("language", "zh");
   geocodingUrl.searchParams.set("format", "json");
 
-  const geocodingResponse = await fetch(geocodingUrl);
+  const geocodingResponse = await fetch(geocodingUrl, { signal: AbortSignal.timeout(3500) });
 
   if (!geocodingResponse.ok) {
     throw new Error("Weather geocoding request failed.");
@@ -154,7 +154,7 @@ export async function getDestinationWeather(destination: string, forecastDays = 
   forecastUrl.searchParams.set("forecast_days", String(safeForecastDays));
   forecastUrl.searchParams.set("timezone", "auto");
 
-  const forecastResponse = await fetch(forecastUrl);
+  const forecastResponse = await fetch(forecastUrl, { signal: AbortSignal.timeout(3500) });
 
   if (!forecastResponse.ok) {
     throw new Error("Weather forecast request failed.");

@@ -17,7 +17,7 @@ export function normalizeMemoryPreferences(preferences: unknown) {
     new Set(
       preferences
         .filter((preference): preference is string => typeof preference === "string")
-        .map((preference) => preference.trim())
+        .map((preference) => preference.trim().slice(0, 200))
         .filter(Boolean)
         .slice(0, 12),
     ),

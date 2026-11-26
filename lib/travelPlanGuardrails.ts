@@ -12,6 +12,33 @@ function isNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+export function isRenderableTravelPlan(value: unknown): value is TravelPlan {
+  if (!value || typeof value !== "object") return false;
+  const plan = value as TravelPlan;
+  return isNonEmptyString(plan.plan_id) &&
+    isNonEmptyString(plan.plan_title) &&
+    Array.isArray(plan.highlights) &&
+    plan.highlights.length <= 30 &&
+    plan.highlights.every((highlight) => typeof highlight === "string") &&
+    typeof plan.budget_per_person === "string" &&
+    Number.isFinite(plan.pace_rating) &&
+    Array.isArray(plan.days) &&
+    plan.days.length >= 1 &&
+    plan.days.length <= 7 &&
+    plan.days.every((day) => day &&
+      Number.isInteger(day.day_number) &&
+      typeof day.day_theme === "string" &&
+      day.accommodation &&
+      typeof day.accommodation.area_recommendation === "string" &&
+      typeof day.accommodation.reason === "string" &&
+      Array.isArray(day.schedule) &&
+      day.schedule.length <= 20 &&
+      day.schedule.every((item) => item &&
+        allowedTimeBuckets.has(item.time_bucket) &&
+        allowedScheduleTypes.has(item.type) &&
+        [item.location, item.activity, item.duration, item.tips].every((field) => typeof field === "string")));
+}
+
 export function validateTravelPlan(
   plan: TravelPlan,
   options?: {

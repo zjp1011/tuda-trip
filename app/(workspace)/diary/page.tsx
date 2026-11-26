@@ -1,17 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import PlanDisplay from "../../components/PlanDisplay";
-import SocialShareModal from "../../components/SocialShareModal";
-import { useUser } from "../../hooks/useUser";
-import { downloadTravelPlanHtml } from "../../lib/exportTravelPlan";
-import type { AgentTrace } from "../../lib/serverAgentTrace";
-import { buildShareUrl, isLocalShareUrl } from "../../lib/shareUrl";
+import PlanDisplay from "@/components/PlanDisplay";
+import SocialShareModal from "@/components/SocialShareModal";
+import { useUser } from "@/hooks/useUser";
+import { downloadTravelPlanHtml } from "@/lib/exportTravelPlan";
+import type { AgentTrace } from "@/lib/serverAgentTrace";
+import { buildShareUrl, isLocalShareUrl } from "@/lib/shareUrl";
 import {
   LEGACY_SAVED_TRIPS_STORAGE_KEY,
   SAVED_TRIPS_STORAGE_KEY,
   type SavedTrip,
-} from "../../lib/savedTrips";
+} from "@/lib/savedTrips";
 
 function readLegacySavedTrips() {
   const savedTripsJson =

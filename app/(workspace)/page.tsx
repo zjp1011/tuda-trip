@@ -3,17 +3,17 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import ItineraryAgentPanel from "../components/ItineraryAgentPanel";
-import PlanDisplay from "../components/PlanDisplay";
-import SocialShareModal from "../components/SocialShareModal";
-import UserMemoryPanel from "../components/UserMemoryPanel";
-import WeatherInsightCard from "../components/WeatherInsightCard";
-import { useUser } from "../hooks/useUser";
-import { downloadTravelPlanHtml } from "../lib/exportTravelPlan";
-import type { SavedTrip } from "../lib/savedTrips";
-import { buildShareUrl, isLocalShareUrl } from "../lib/shareUrl";
-import { defaultUserMemory, type UserMemory } from "../lib/userMemory";
-import type { TravelPlan, TravelPlansResponse } from "../types/travel";
+import ItineraryAgentPanel from "@/components/ItineraryAgentPanel";
+import PlanDisplay from "@/components/PlanDisplay";
+import SocialShareModal from "@/components/SocialShareModal";
+import UserMemoryPanel from "@/components/UserMemoryPanel";
+import WeatherInsightCard from "@/components/WeatherInsightCard";
+import { useUser } from "@/hooks/useUser";
+import { downloadTravelPlanHtml } from "@/lib/exportTravelPlan";
+import type { SavedTrip } from "@/lib/savedTrips";
+import { buildShareUrl, isLocalShareUrl } from "@/lib/shareUrl";
+import { defaultUserMemory, type UserMemory } from "@/lib/userMemory";
+import type { TravelPlan, TravelPlansResponse } from "@/types/travel";
 
 type CompanionType = "单人" | "情侣" | "亲子" | "朋友";
 type BudgetPreference = "经济实惠" | "舒适预算" | "品质享受" | "不设上限";

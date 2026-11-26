@@ -1,95 +1,58 @@
 import { NextResponse } from "next/server";
-import {
-  deleteSavedRoute,
-  getSavedRoutes,
-  saveRoute,
-} from "../../../lib/serverSavedRoutes";
+import { deleteSavedRoute, getSavedRoutes, saveRoute } from "../../../lib/serverSavedRoutes";
+import { readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
 import type { SavedTrip } from "../../../lib/savedTrips";
-import type { TravelPlan } from "../../../types/travel";
+import { isRenderableTravelPlan } from "../../../lib/travelPlanGuardrails";
 
-type SaveRouteRequestBody = {
-  userId?: string;
-  tripId?: string;
-  destination?: string;
-  plan?: TravelPlan;
-};
+type SaveRequest = { userId?: string; tripId?: string; destination?: string; plan?: unknown };
+const privateHeaders = { "Cache-Control": "private, no-store" };
 
-function isValidPlan(plan: unknown): plan is TravelPlan {
-  return (
-    typeof plan === "object" &&
-    plan !== null &&
-    "plan_id" in plan &&
-    "plan_title" in plan &&
-    "days" in plan
-  );
+function guest(request: Request, developmentUserId?: unknown) {
+  const user = requestUser(request, developmentUserId);
+  if (!user) throw new RequestError(400, "游客身份无效。");
+  return user;
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const userId = searchParams.get("userId");
-
-  if (!userId) {
-    return NextResponse.json({ error: "userId is required." }, { status: 400 });
+  try {
+    const user = guest(request, new URL(request.url).searchParams.get("userId"));
+    return NextResponse.json({ trips: await getSavedRoutes(user) }, { headers: privateHeaders });
+  } catch (error) {
+    return requestFailure(error, "暂时无法读取收藏行程。");
   }
-
-  const trips = await getSavedRoutes(userId);
-  return NextResponse.json({ trips });
 }
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as SaveRouteRequestBody;
-
-    if (!body.userId) {
-      return NextResponse.json({ error: "userId is required." }, { status: 400 });
-    }
-
-    if (!isValidPlan(body.plan)) {
-      return NextResponse.json({ error: "plan is required." }, { status: 400 });
-    }
-
-    const savedTrip: SavedTrip = {
+    requireSameOrigin(request);
+    const body = await readJson<SaveRequest>(request);
+    const user = guest(request, body.userId);
+    if (!isRenderableTravelPlan(body.plan)) throw new RequestError(400, "行程内容无效。");
+    const trip: SavedTrip = {
       id: crypto.randomUUID(),
       title: body.plan.plan_title,
-      destination: body.destination || "未命名目的地",
+      destination: typeof body.destination === "string" && body.destination.trim()
+        ? body.destination.trim().slice(0, 100)
+        : "未命名目的地",
       createdAt: new Date().toISOString(),
       plan: body.plan,
     };
-
-    const result = await saveRoute(body.userId, savedTrip);
-    return NextResponse.json(result);
+    return NextResponse.json(await saveRoute(user, trip), { headers: privateHeaders });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: "Failed to save route.",
-        details: error instanceof Error ? error.message : "Unknown server error.",
-      },
-      { status: 500 },
-    );
+    return requestFailure(error, "暂时无法收藏行程。");
   }
 }
 
 export async function DELETE(request: Request) {
   try {
-    const body = (await request.json()) as SaveRouteRequestBody;
-
-    if (!body.userId) {
-      return NextResponse.json({ error: "userId is required." }, { status: 400 });
+    requireSameOrigin(request);
+    const body = await readJson<SaveRequest>(request, 2048);
+    const user = guest(request, body.userId);
+    if (typeof body.tripId !== "string" || !body.tripId || body.tripId.length > 80) {
+      throw new RequestError(400, "行程标识无效。");
     }
-
-    if (!body.tripId) {
-      return NextResponse.json({ error: "tripId is required." }, { status: 400 });
-    }
-
-    const trips = await deleteSavedRoute(body.userId, body.tripId);
-    return NextResponse.json({ trips });
+    return NextResponse.json({ trips: await deleteSavedRoute(user, body.tripId) }, { headers: privateHeaders });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: "Failed to delete route.",
-        details: error instanceof Error ? error.message : "Unknown server error.",
-      },
-      { status: 500 },
-    );
+    return requestFailure(error, "暂时无法删除行程。");
   }
 }

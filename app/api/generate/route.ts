@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { claimPaidRequest, getDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
+import { isRenderableTravelPlan } from "../../../lib/travelPlanGuardrails";
 import { generateEmbedding } from "../../../lib/openai";
 import { formatUserMemoryForPrompt, normalizeMemoryPreferences } from "../../../lib/userMemory";
 import {
@@ -42,14 +44,18 @@ const CACHE_HIT_THRESHOLD = 0.95;
 const UPSTASH_TIMEOUT_MS = 2500;
 
 function normalizeRequestBody(body: GenerateRequestBody): NormalizedGenerateRequest | null {
-  const destination = body.destination?.trim();
+  const trim = (value: unknown, limit: number) => typeof value === "string" ? value.trim().slice(0, limit) : "";
+  const normalizeChoices = (value: unknown, limit: number) => Array.isArray(value)
+    ? value.slice(0, limit).map((item: unknown) => trim(item, 80)).filter(Boolean)
+    : [];
+  const destination = trim(body.destination, 100);
   const days = Number(body.days);
-  const companion = body.companion?.trim();
-  const budgetPreference = body.budgetPreference?.trim() || "舒适预算";
-  const customBudget = body.customBudget?.trim().replace(/[^\d]/g, "") ?? "";
-  const travelStyles = Array.isArray(body.travelStyles) ? body.travelStyles.slice(0, 3) : [];
-  const foodPreferences = Array.isArray(body.foodPreferences) ? body.foodPreferences : [];
-  const customFoodPreference = body.customFoodPreference?.trim() ?? "";
+  const companion = trim(body.companion, 30);
+  const budgetPreference = trim(body.budgetPreference, 80) || "舒适预算";
+  const customBudget = trim(body.customBudget, 12).replace(/[^\d]/g, "");
+  const travelStyles = normalizeChoices(body.travelStyles, 3);
+  const foodPreferences = normalizeChoices(body.foodPreferences, 10);
+  const customFoodPreference = trim(body.customFoodPreference, 120);
   const userMemoryPreferences = normalizeMemoryPreferences(body.userMemoryPreferences);
 
   if (!destination || !Number.isInteger(days) || days < 1 || days > 7 || !companion) {
@@ -209,8 +215,8 @@ async function queryTravelPlanCache(embedding: number[]) {
 
     console.log("⚡ 缓存命中");
     return cachedTravelPlan;
-  } catch (error) {
-    console.warn("Upstash cache query failed, falling back to LLM:", error);
+  } catch {
+    console.warn("Upstash cache unavailable, continuing with generation.");
     return null;
   }
 }
@@ -218,21 +224,17 @@ async function queryTravelPlanCache(embedding: number[]) {
 async function generateTravelPlanWithLLM(
   body: NormalizedGenerateRequest,
   weather: DestinationWeather | null,
+  apiKey: string,
 ) {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("Missing environment variable: DEEPSEEK_API_KEY");
-  }
-
   const response = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
+    signal: AbortSignal.timeout(75_000),
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash",
+      model: process.env.DEEPSEEK_MODEL || "deepseek-flash",
       messages: [
         {
           role: "system",
@@ -251,8 +253,7 @@ async function generateTravelPlanWithLLM(
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`DeepSeek API request failed: ${errorText}`);
+    throw new RequestError(502, "AI 生成服务暂不可用。");
   }
 
   const completion = await response.json();
@@ -269,7 +270,12 @@ async function generateTravelPlanWithLLM(
     throw new Error("DeepSeek returned an empty travel plan response.");
   }
 
-  return JSON.parse(outputText) as TravelPlansResponse;
+  const parsed = JSON.parse(outputText) as TravelPlansResponse;
+  if (!Array.isArray(parsed?.plans) || parsed.plans.length === 0 ||
+      !parsed.plans.every(isRenderableTravelPlan)) {
+    throw new RequestError(502, "AI 返回的行程不完整，请重试。");
+  }
+  return parsed;
 }
 
 async function upsertTravelPlanCache(
@@ -292,14 +298,17 @@ async function upsertTravelPlanCache(
       UPSTASH_TIMEOUT_MS,
       "Upstash upsert",
     );
-  } catch (error) {
-    console.warn("Upstash cache upsert failed:", error);
+  } catch {
+    console.warn("Upstash cache write failed.");
   }
 }
 
 export async function POST(request: Request) {
+  let release: (() => void) | undefined;
   try {
-    const body = (await request.json()) as GenerateRequestBody;
+    const user = requestUser(request);
+    requireSameOrigin(request);
+    const body = await readJson<GenerateRequestBody>(request, 16 * 1024);
     const normalizedBody = normalizeRequestBody(body);
 
     if (!normalizedBody) {
@@ -309,34 +318,29 @@ export async function POST(request: Request) {
       );
     }
 
+    const apiKey = getDeepSeekKey();
+    release = await claimPaidRequest(user);
     let weather: DestinationWeather | null = null;
 
     try {
       weather = await getDestinationWeather(normalizedBody.destination, normalizedBody.days);
-    } catch (error) {
-      console.warn("Weather tool failed, continuing without weather:", error);
+    } catch {
+      console.warn("Weather service unavailable, continuing without forecast.");
     }
 
-    const cacheKeyText = buildCacheKeyText(normalizedBody, weather);
-    const embedding = await generateEmbedding(cacheKeyText);
-    const cachedTravelPlan = await queryTravelPlanCache(embedding);
-
-    if (cachedTravelPlan) {
-      return NextResponse.json(cachedTravelPlan);
+    if (process.env.UPSTASH_VECTOR_REST_URL && process.env.UPSTASH_VECTOR_REST_TOKEN) {
+      const cacheKeyText = buildCacheKeyText(normalizedBody, weather);
+      const embedding = await generateEmbedding(cacheKeyText);
+      const cachedTravelPlan = await queryTravelPlanCache(embedding);
+      if (cachedTravelPlan) return NextResponse.json(cachedTravelPlan);
+      const travelPlan = await generateTravelPlanWithLLM(normalizedBody, weather, apiKey);
+      await upsertTravelPlanCache(embedding, cacheKeyText, travelPlan);
+      return NextResponse.json(travelPlan);
     }
-
-    const travelPlan = await generateTravelPlanWithLLM(normalizedBody, weather);
-    await upsertTravelPlanCache(embedding, cacheKeyText, travelPlan);
-
-    console.log("🐌 新生成并已缓存");
-    return NextResponse.json(travelPlan);
+    return NextResponse.json(await generateTravelPlanWithLLM(normalizedBody, weather, apiKey));
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: "Failed to generate travel plan.",
-        details: error instanceof Error ? error.message : "Unknown server error.",
-      },
-      { status: 500 },
-    );
+    return requestFailure(error, "暂时无法生成行程。");
+  } finally {
+    release?.();
   }
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { claimPaidRequest, getDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
 import {
   createAgentTrace,
   getAgentTraces,
@@ -12,7 +13,7 @@ import {
   type AgentToolAction,
   type TravelPlanToolReport,
 } from "../../../lib/travelPlanTools";
-import { validateTravelPlan } from "../../../lib/travelPlanGuardrails";
+import { isRenderableTravelPlan, validateTravelPlan } from "../../../lib/travelPlanGuardrails";
 import { formatUserMemoryForPrompt, normalizeMemoryPreferences } from "../../../lib/userMemory";
 import {
   formatWeatherForPrompt,
@@ -40,19 +41,6 @@ type AgentExecutionContext = {
   weather: DestinationWeather | null;
   actions: AgentToolAction[];
 };
-
-function isValidTravelPlan(plan: unknown): plan is TravelPlan {
-  return (
-    typeof plan === "object" &&
-    plan !== null &&
-    "plan_id" in plan &&
-    "plan_title" in plan &&
-    "highlights" in plan &&
-    "budget_per_person" in plan &&
-    "pace_rating" in plan &&
-    "days" in plan
-  );
-}
 
 function buildRefinePrompt(
   currentPlan: TravelPlan,
@@ -122,21 +110,17 @@ async function refineRouteWithLLM(
   instruction: string,
   userMemoryPreferences: string[],
   executionContext: AgentExecutionContext,
+  apiKey: string,
 ) {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("Missing environment variable: DEEPSEEK_API_KEY");
-  }
-
   const response = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
+    signal: AbortSignal.timeout(75_000),
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash",
+      model: process.env.DEEPSEEK_MODEL || "deepseek-flash",
       messages: [
         {
           role: "system",
@@ -161,8 +145,7 @@ async function refineRouteWithLLM(
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`DeepSeek API request failed: ${errorText}`);
+    throw new RequestError(502, "AI 生成服务暂不可用。");
   }
 
   const completion = await response.json();
@@ -181,8 +164,8 @@ async function refineRouteWithLLM(
 
   const parsed = JSON.parse(outputText) as RefineRouteResponse;
 
-  if (!isValidTravelPlan(parsed.plan)) {
-    throw new Error("DeepSeek returned an invalid TravelPlan.");
+  if (!isRenderableTravelPlan(parsed?.plan)) {
+    throw new RequestError(502, "AI 返回的行程不完整，请重试。");
   }
 
   const guardrailResult = validateTravelPlan(parsed.plan, {
@@ -212,18 +195,18 @@ async function refineRouteWithLLM(
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const userId = searchParams.get("userId");
-
-  if (!userId) {
-    return NextResponse.json({ error: "userId is required." }, { status: 400 });
+  try {
+    const userId = requestUser(request, new URL(request.url).searchParams.get("userId"));
+    if (!userId) throw new RequestError(400, "游客身份无效。");
+    const traces = await getAgentTraces(userId);
+    return NextResponse.json({ traces }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    return requestFailure(error, "暂时无法读取行程修改记录。");
   }
-
-  const traces = await getAgentTraces(userId);
-  return NextResponse.json({ traces });
 }
 
 export async function POST(request: Request) {
+  let release: (() => void) | undefined;
   let traceContext:
     | {
         userId?: string;
@@ -237,32 +220,39 @@ export async function POST(request: Request) {
     | null = null;
 
   try {
-    const body = (await request.json()) as RefineRouteRequestBody;
-    const instruction = body.instruction?.trim();
+    requireSameOrigin(request);
+    const body = await readJson<RefineRouteRequestBody>(request);
+    const userId = requestUser(request, body.userId) ?? undefined;
+    const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
 
-    if (!isValidTravelPlan(body.currentPlan)) {
+    if (!isRenderableTravelPlan(body.currentPlan)) {
       return NextResponse.json({ error: "currentPlan is required." }, { status: 400 });
     }
+    if (JSON.stringify(body.currentPlan).length > 24_000) {
+      throw new RequestError(413, "行程内容太长，请缩减内容后重试。");
+    }
 
-    if (!instruction) {
+    if (!instruction || instruction.length > 1000) {
       return NextResponse.json({ error: "instruction is required." }, { status: 400 });
     }
 
+    const apiKey = getDeepSeekKey();
+    release = await claimPaidRequest(userId ?? null);
     const userMemoryPreferences = normalizeMemoryPreferences(body.userMemoryPreferences);
     const toolReport = analyzeTravelPlan(body.currentPlan);
     const editScope = detectAgentEditScope(body.currentPlan, instruction);
     let weather: DestinationWeather | null = null;
 
     try {
-      const destination = body.destination?.trim() || body.currentPlan.plan_title;
-      weather = await getDestinationWeather(destination, body.currentPlan.days.length);
-    } catch (error) {
-      console.warn("Weather tool failed during refine:", error);
+      const destination = (typeof body.destination === "string" ? body.destination.trim() : "") || body.currentPlan.plan_title;
+      weather = await getDestinationWeather(destination.slice(0, 100), body.currentPlan.days.length);
+    } catch {
+      console.warn("Weather service unavailable, continuing without forecast.");
     }
 
     const actions = buildAgentToolActions(body.currentPlan, instruction, toolReport);
     traceContext = {
-      userId: body.userId,
+      userId,
       instruction,
       userMemoryPreferences,
       toolReport,
@@ -280,10 +270,11 @@ export async function POST(request: Request) {
         weather,
         actions,
       },
+      apiKey,
     );
-    await saveAgentTrace(
+    if (userId) await saveAgentTrace(
       createAgentTrace({
-        userId: body.userId,
+        userId,
         instruction,
         status: "success",
         reply: result.reply,
@@ -294,16 +285,16 @@ export async function POST(request: Request) {
         memoryPreferences: userMemoryPreferences,
         guardrailIssues: result.guardrailIssues,
       }),
-    );
+    ).catch(() => console.warn("Could not save trip trace."));
     return NextResponse.json(result);
   } catch (error) {
-    if (traceContext) {
+    if (traceContext?.userId) {
       await saveAgentTrace(
         createAgentTrace({
           userId: traceContext.userId,
           instruction: traceContext.instruction,
           status: "failed",
-          error: error instanceof Error ? error.message : "Unknown server error.",
+          error: error instanceof RequestError ? error.message : "行程修改暂未完成。",
           editScope: traceContext.editScope,
           actions: traceContext.actions,
           toolReport: traceContext.toolReport,
@@ -314,15 +305,11 @@ export async function POST(request: Request) {
               ? error.message.replace("Guardrails failed: ", "").split("；")
               : [],
         }),
-      );
+      ).catch(() => console.warn("Could not save trip trace."));
     }
 
-    return NextResponse.json(
-      {
-        error: "Failed to refine travel plan.",
-        details: error instanceof Error ? error.message : "Unknown server error.",
-      },
-      { status: 500 },
-    );
+    return requestFailure(error, "暂时无法修改行程。");
+  } finally {
+    release?.();
   }
 }

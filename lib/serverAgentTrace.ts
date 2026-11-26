@@ -1,5 +1,4 @@
-import { mkdir, readFile, writeFile } from "fs/promises";
-import path from "path";
+import { readStore, updateStore } from "./serverData";
 import type {
   AgentEditScope,
   AgentToolAction,
@@ -25,33 +24,18 @@ export type AgentTrace = {
 
 type AgentTraceStore = Record<string, AgentTrace[]>;
 
-const dataDirectory = path.join(process.cwd(), ".data");
-const storePath = path.join(dataDirectory, "agent-traces.json");
-
-async function readStore(): Promise<AgentTraceStore> {
-  try {
-    const content = await readFile(storePath, "utf8");
-    return JSON.parse(content) as AgentTraceStore;
-  } catch {
-    return {};
-  }
-}
-
-async function writeStore(store: AgentTraceStore) {
-  await mkdir(dataDirectory, { recursive: true });
-  await writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
-}
+const file = "agent-traces.json";
 
 export async function saveAgentTrace(trace: AgentTrace) {
-  const store = await readStore();
-  const existingTraces = store[trace.userId] ?? [];
-  store[trace.userId] = [trace, ...existingTraces].slice(0, 50);
-  await writeStore(store);
-  return trace;
+  return updateStore<AgentTraceStore, AgentTrace>(file, (store) => {
+    const existingTraces = store[trace.userId] ?? [];
+    store[trace.userId] = [trace, ...existingTraces].slice(0, 50);
+    return trace;
+  });
 }
 
 export async function getAgentTraces(userId: string) {
-  const store = await readStore();
+  const store = await readStore<AgentTraceStore>(file);
   return store[userId] ?? [];
 }
 
