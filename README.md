@@ -19,7 +19,7 @@
 - AI 行程管家，支持自然语言二次修改路线
 - Agent Trace 持久化，记录每次工具调用、天气结果、记忆和执行状态
 - Guardrails 行程校验，检查结构化输出、枚举值、天数和局部编辑边界
-- 游客身份隔离，自动生成 `tour_ai_guest_id`
+- 生产内测使用访问口令，服务端会话隔离每位访客的收藏、偏好和执行记录
 - 收藏行程，按游客 ID 获取专属收藏列表
 - 公开分享页，可复制 `/share/[shareId]` 链接给朋友查看行程
 - 小红书风 / 朋友圈风文案生成
@@ -80,7 +80,7 @@ types/               旅行计划 TypeScript 类型
 - Upstash Vector
 - DeepSeek / SiliconFlow API
 - Open-Meteo 天气 API
-- LocalStorage 游客身份
+- 服务端签名会话
 - 本地 `.data/*.json` 文件存储
 
 ## 本地运行
@@ -88,7 +88,7 @@ types/               旅行计划 TypeScript 类型
 安装依赖：
 
 ```bash
-npm install
+npm ci
 ```
 
 复制环境变量示例：
@@ -101,7 +101,7 @@ cp .env.local.example .env.local
 
 ```env
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
-DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_MODEL=deepseek-flash
 SILICONFLOW_API_KEY=your_siliconflow_api_key_here
 SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3
 VECTOR_DIMENSION=1536
@@ -140,6 +140,11 @@ npx tsc --noEmit
 | `UPSTASH_VECTOR_REST_URL` | Upstash Vector REST URL |
 | `UPSTASH_VECTOR_REST_TOKEN` | Upstash Vector REST Token |
 | `NEXT_PUBLIC_SHARE_BASE_URL` | 分享链接使用的公网域名 |
+| `TUDA_PUBLIC_ORIGIN` | 生产站点的 HTTPS 地址，例如 `https://trip.yayapeng.xyz` |
+| `TUDA_INVITE_PASSWORD` | 内测口令，供获邀访客登录 |
+| `TUDA_SESSION_SECRET` | 由服务端独立生成的会话签名密钥 |
+| `TUDA_DAILY_CALL_LIMIT` | 全站每天可调用付费接口的次数 |
+| `TUDA_DATA_DIR` | 显式指定持久数据目录。systemd 部署也可使用 `STATE_DIRECTORY` |
 
 ## 分享链接说明
 
@@ -171,11 +176,7 @@ npm run dev
 
 ## 数据存储说明
 
-当前项目使用游客 ID 做轻量身份隔离：
-
-```text
-localStorage.tour_ai_guest_id
-```
+生产服务从签名会话读取访客身份。已生成的公开分享链接可供持有链接的访客查看行程。
 
 本地开发环境下，数据会保存到：
 
@@ -188,11 +189,7 @@ localStorage.tour_ai_guest_id
 
 `.data/` 已加入 `.gitignore`，不会上传到 GitHub。
 
-正式上线时建议替换为数据库或 KV 存储，例如：
-
-- Supabase / Postgres：适合用户、收藏、分享记录
-- Upstash Redis / KV：适合轻量缓存和分享记录
-- Upstash Vector：继续用于语义缓存
+生产单实例将记录保存在发布目录之外的持久状态目录。备份时包含这个目录，更新应用版本时使用同一目录。
 
 ## 核心业务流程
 
@@ -246,15 +243,13 @@ localStorage.tour_ai_guest_id
 | `/api/user-memory` | GET / POST | 获取、保存用户偏好 |
 | `/api/weather` | GET | 查询目的地天气 |
 
-## 部署建议
+## 部署到 Yayapeng Lab
 
-推荐部署到 Vercel。部署时需要在 Vercel 项目的 Environment Variables 中配置 `.env.local.example` 里的变量。
+生产部署的入口为 `trip.yayapeng.xyz`。GitHub Actions 在 Linux 构建 Next.js standalone 包。Caddy 通过本机端口访问独立的 `tuda-trip.service`，用户数据存放在 `/var/lib/tuda-trip`。
 
-如果要让分享页在线可访问，需要额外注意：
+首次接入由服务器管理员运行 `ops/bootstrap-trip-deploy.sh`，传入专用部署公钥和仅管理员可读的运行环境文件。该文件保存于 `/etc/tuda-trip/runtime.env`。启用模型前配置 `DEEPSEEK_API_KEY`，向量缓存可按需配置。模型 Key 和会话签名密钥在服务器上输入并保管。
 
-- `NEXT_PUBLIC_SHARE_BASE_URL` 必须填写线上域名
-- `.data/*.json` 只适合本地开发，不适合 Serverless 生产环境长期存储
-- 生产环境建议把收藏、分享、记忆、Trace 改成数据库或 KV 存储
+在仓库 Actions Secrets 配置 `DEPLOY_SSH_KEY` 和 `DEPLOY_KNOWN_HOSTS`。首次从 `main` 手动运行发布并验证 `/api/health`、首页及内测登录，随后可将仓库变量 `DEPLOY_ENABLED` 设为 `true`，让以后的 `main` 推送自动部署。手动运行时填写 `rollback_release` 可恢复服务器已保留的提交版本。
 
 ## 后续规划
 
