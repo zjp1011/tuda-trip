@@ -1,12 +1,14 @@
 import { randomUUID } from "crypto";
 import { readStore, updateStore } from "./serverData";
 import type { SavedTrip } from "./savedTrips";
+import { parseDepartureDate } from "./weatherTool";
 
 export type SharedRoute = {
   id: string;
   sourceTripId: string;
   title: string;
   destination: string;
+  departureDate?: string;
   createdAt: string;
   plan: SavedTrip["plan"];
 };
@@ -23,11 +25,13 @@ export async function createSharedRoute(savedTrip: SavedTrip, userId: string | n
     );
     if (existingShare) return existingShare;
 
+    const departureDate = parseDepartureDate(savedTrip.departureDate);
     const sharedRoute: SharedRoute = {
       id: randomUUID(),
       sourceTripId: savedTrip.id,
       title: savedTrip.title,
       destination: savedTrip.destination,
+      ...(departureDate ? { departureDate } : {}),
       createdAt: new Date().toISOString(),
       plan: savedTrip.plan,
     };

@@ -31,12 +31,23 @@ type GeocodingResponse = {
 type ForecastResponse = {
   daily?: {
     time?: string[];
-    weather_code?: number[];
-    temperature_2m_max?: number[];
-    temperature_2m_min?: number[];
-    precipitation_probability_max?: number[];
+    weather_code?: Array<number | null>;
+    temperature_2m_max?: Array<number | null>;
+    temperature_2m_min?: Array<number | null>;
+    precipitation_probability_max?: Array<number | null>;
   };
 };
+
+const MAX_FORECAST_DAYS = 16;
+const DAY_MS = 86_400_000;
+
+export function parseDepartureDate(value: unknown): string | null | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : null;
+}
 
 function getWeatherLabel(code: number) {
   if (code === 0) {
@@ -112,14 +123,20 @@ function buildWeatherSummary(days: WeatherDay[]) {
   return `${days.length} 天预报以${labels}为主，气温约 ${minTemperature}-${maxTemperature}°C，最高降雨概率 ${maxRainProbability}%`;
 }
 
-export async function getDestinationWeather(destination: string, forecastDays = 3) {
+export async function getDestinationWeather(destination: string, travelDays: number, departureDate?: string) {
   const trimmedDestination = destination.trim();
+  const start = parseDepartureDate(departureDate);
 
-  if (!trimmedDestination) {
+  if (!trimmedDestination || !start || !Number.isInteger(travelDays) || travelDays < 1) {
     return null;
   }
 
-  const safeForecastDays = Math.min(16, Math.max(1, Math.round(forecastDays)));
+  const departureTime = Date.parse(`${start}T00:00:00Z`);
+  const offset = departureTime / DAY_MS - Math.floor(Date.now() / DAY_MS);
+  // The destination's local date can be a day ahead of or behind UTC. The returned local dates decide coverage.
+  if (offset < -1 || offset > MAX_FORECAST_DAYS) return null;
+  const forecastDays = Math.min(MAX_FORECAST_DAYS, travelDays + offset + 1);
+  const lastDay = new Date(departureTime + (travelDays - 1) * DAY_MS).toISOString().slice(0, 10);
   const geocodingUrl = new URL("https://geocoding-api.open-meteo.com/v1/search");
   geocodingUrl.searchParams.set("name", trimmedDestination);
   geocodingUrl.searchParams.set("count", "1");
@@ -151,7 +168,7 @@ export async function getDestinationWeather(destination: string, forecastDays = 
       "precipitation_probability_max",
     ].join(","),
   );
-  forecastUrl.searchParams.set("forecast_days", String(safeForecastDays));
+  forecastUrl.searchParams.set("forecast_days", String(forecastDays));
   forecastUrl.searchParams.set("timezone", "auto");
 
   const forecastResponse = await fetch(forecastUrl, { signal: AbortSignal.timeout(3500) });
@@ -163,22 +180,31 @@ export async function getDestinationWeather(destination: string, forecastDays = 
   const forecastData = (await forecastResponse.json()) as ForecastResponse;
   const daily = forecastData.daily;
 
-  if (!daily?.time) {
+  if (!Array.isArray(daily?.time) || daily.time.length === 0 || start < daily.time[0]) {
     return null;
   }
 
-  const days = daily.time.map<WeatherDay>((date, index) => {
-    const weatherCode = daily.weather_code?.[index] ?? 0;
+  const days = daily.time.flatMap<WeatherDay>((date, index) => {
+    if (typeof date !== "string" || date < start || date > lastDay) return [];
 
-    return {
+    const weatherCode = daily.weather_code?.[index];
+    const high = daily.temperature_2m_max?.[index];
+    const low = daily.temperature_2m_min?.[index];
+    const rain = daily.precipitation_probability_max?.[index];
+    if (weatherCode == null || high == null || low == null || rain == null ||
+        ![weatherCode, high, low, rain].every(Number.isFinite)) return [];
+
+    return [{
       date,
       weatherCode,
       weatherLabel: getWeatherLabel(weatherCode),
-      temperatureMax: Math.round(daily.temperature_2m_max?.[index] ?? 0),
-      temperatureMin: Math.round(daily.temperature_2m_min?.[index] ?? 0),
-      precipitationProbability: Math.round(daily.precipitation_probability_max?.[index] ?? 0),
-    };
+      temperatureMax: Math.round(high),
+      temperatureMin: Math.round(low),
+      precipitationProbability: Math.round(rain),
+    }];
   });
+
+  if (days.length === 0) return null;
 
   const advice = buildWeatherAdvice(days);
 
@@ -195,11 +221,12 @@ export async function getDestinationWeather(destination: string, forecastDays = 
   } satisfies DestinationWeather;
 }
 
-export function formatWeatherForPrompt(weather: DestinationWeather | null) {
+export function formatWeatherForPrompt(weather: DestinationWeather | null, departureDate?: string) {
   if (!weather) {
-    return "天气工具暂未返回可用数据。";
+    return "本次出行日期暂无可用预报。";
   }
 
+  const departureTime = departureDate ? Date.parse(`${departureDate}T00:00:00Z`) : NaN;
   return JSON.stringify(
     {
       destination: weather.destination,
@@ -207,7 +234,12 @@ export function formatWeatherForPrompt(weather: DestinationWeather | null) {
       summary: weather.summary,
       warnings: weather.warnings,
       suggestions: weather.suggestions,
-      days: weather.days,
+      days: weather.days.map((day) => ({
+        ...day,
+        day_number: Number.isFinite(departureTime)
+          ? (Date.parse(`${day.date}T00:00:00Z`) - departureTime) / DAY_MS + 1
+          : undefined,
+      })),
     },
     null,
     2,

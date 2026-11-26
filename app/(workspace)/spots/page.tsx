@@ -11,32 +11,30 @@ const destinations = [
 
 export default function SpotsPage() {
   return (
-    <div className="min-h-screen bg-[#070707] px-5 py-8 text-white sm:px-8 lg:px-12">
-      <div className="mx-auto max-w-6xl">
-        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
-          Destination Picks
+    <div className="tuda-subpage">
+      <header className="tuda-subpage-heading">
+        <h1>目的地灵感</h1>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--tuda-muted)]">
+          选择一座城市，带入行程工作区，再按天数、预算和口味规划。
         </p>
-        <h1 className="mt-2 text-3xl font-black">景点推荐</h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-white/50">
-          先挑一个有感觉的城市，再回到生成器里让 AI 按你的天数、预算和口味生成完整路线。
-        </p>
+      </header>
 
-        <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {destinations.map((destination) => (
-            <Link
-              key={destination.label}
-              href={`/?city=${encodeURIComponent(destination.label)}`}
-              className="rounded-3xl border border-white/10 bg-white/[0.06] p-6 shadow-xl shadow-black/20 backdrop-blur-xl transition-all hover:-translate-y-1 hover:bg-white/[0.09]"
-            >
-              <p className="text-sm font-black text-orange-200">{destination.label}</p>
-              <h2 className="mt-3 text-xl font-black">{destination.title}</h2>
-              <p className="mt-3 text-sm leading-6 text-white/50">{destination.description}</p>
-              <span className="mt-6 inline-flex rounded-full bg-white px-4 py-2 text-xs font-black text-slate-950">
-                用这个城市生成
-              </span>
-            </Link>
-          ))}
-        </div>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {destinations.map((destination) => (
+          <Link
+            key={destination.label}
+            href={`/?city=${encodeURIComponent(destination.label)}`}
+            className="tuda-panel flex flex-col p-5 hover:border-[#4d8c8d] sm:p-6"
+          >
+            <p className="tuda-kicker">{destination.label}</p>
+            <h2 className="mt-3 text-lg font-bold">{destination.title}</h2>
+            <p className="mt-2 mb-5 text-sm leading-6 text-[var(--tuda-muted)]">{destination.description}</p>
+            <span className="mt-auto flex items-center justify-between gap-2 border-t border-[var(--tuda-line)] pt-3 text-xs font-semibold text-[var(--tuda-accent)]">
+              选择这个城市
+              <span aria-hidden="true">→</span>
+            </span>
+          </Link>
+        ))}
       </div>
     </div>
   );

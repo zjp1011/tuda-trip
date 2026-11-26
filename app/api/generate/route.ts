@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { callDeepSeek, claimPaidRequest, deepSeekCacheScope, readDeepSeekKey, readJson, RequestError, requestFailure, requestUser, requireSameOrigin } from "../../../lib/serverAccess";
-import { isRenderableTravelPlan } from "../../../lib/travelPlanGuardrails";
+import { isRenderableTravelPlan, validateTravelPlan } from "../../../lib/travelPlanGuardrails";
 import { generateEmbedding } from "../../../lib/openai";
 import { formatUserMemoryForPrompt, normalizeMemoryPreferences } from "../../../lib/userMemory";
 import {
   formatWeatherForPrompt,
   getDestinationWeather,
+  parseDepartureDate,
   type DestinationWeather,
 } from "../../../lib/weatherTool";
 import type { TravelPlansResponse } from "../../../types/travel";
@@ -13,6 +15,7 @@ import type { TravelPlansResponse } from "../../../types/travel";
 type GenerateRequestBody = {
   destination?: string;
   days?: number;
+  departureDate?: string;
   companion?: string;
   budgetPreference?: string;
   customBudget?: string;
@@ -25,6 +28,7 @@ type GenerateRequestBody = {
 type NormalizedGenerateRequest = {
   destination: string;
   days: number;
+  departureDate?: string;
   companion: string;
   budgetPreference: string;
   customBudget: string;
@@ -35,6 +39,7 @@ type NormalizedGenerateRequest = {
 };
 
 type TravelCacheMetadata = {
+  requestKey?: string;
   travelPlanJson?: string;
   createdAt?: string;
 };
@@ -43,6 +48,9 @@ const CACHE_HIT_THRESHOLD = 0.95;
 const UPSTASH_TIMEOUT_MS = 2500;
 
 function normalizeRequestBody(body: GenerateRequestBody): NormalizedGenerateRequest | null {
+  const departureDate = parseDepartureDate(body.departureDate);
+  if (departureDate === null) throw new RequestError(400, "出发日期无效，请重新选择。");
+
   const trim = (value: unknown, limit: number) => typeof value === "string" ? value.trim().slice(0, limit) : "";
   const normalizeChoices = (value: unknown, limit: number) => Array.isArray(value)
     ? value.slice(0, limit).map((item: unknown) => trim(item, 80)).filter(Boolean)
@@ -64,6 +72,7 @@ function normalizeRequestBody(body: GenerateRequestBody): NormalizedGenerateRequ
   return {
     destination,
     days,
+    departureDate,
     companion,
     budgetPreference,
     customBudget,
@@ -75,21 +84,7 @@ function normalizeRequestBody(body: GenerateRequestBody): NormalizedGenerateRequ
 }
 
 function buildCacheKeyText(body: NormalizedGenerateRequest, weather: DestinationWeather | null) {
-  return [
-    body.destination,
-    `${body.days}天`,
-    body.companion,
-    body.budgetPreference,
-    body.customBudget ? `自定义人均${body.customBudget}元` : "",
-    ...body.travelStyles,
-    ...body.foodPreferences,
-    body.customFoodPreference,
-    ...body.userMemoryPreferences,
-    weather ? new Date().toISOString().slice(0, 10) : "",
-    weather?.summary ?? "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  return JSON.stringify({ request: body, forecast: weather });
 }
 
 function buildUserPrompt(body: NormalizedGenerateRequest, weather: DestinationWeather | null) {
@@ -101,6 +96,7 @@ function buildUserPrompt(body: NormalizedGenerateRequest, weather: DestinationWe
 请根据以下用户偏好，生成 1 个适合展示在 Web App 中的旅游行程 JSON。
 
 - 目的地：${body.destination}
+- 出发日期：${body.departureDate ?? "未指定"}
 - 游玩天数：${body.days} 天
 - 同行人员：${body.companion}
 - 人均预算：${budgetText}
@@ -110,7 +106,7 @@ function buildUserPrompt(body: NormalizedGenerateRequest, weather: DestinationWe
 - 长期偏好记忆：${formatUserMemoryForPrompt(body.userMemoryPreferences)}
 
 天气工具结果：
-${formatWeatherForPrompt(weather)}
+${formatWeatherForPrompt(weather, body.departureDate)}
 
 要求：
 1. 只返回 JSON，不要输出 Markdown、解释、代码块或额外文字。
@@ -128,7 +124,8 @@ ${formatWeatherForPrompt(weather)}
 13. 如果用户填写了自定义金额，必须优先按照自定义金额控制预算，而不是预算档位。
 14. budget_per_person 必须输出与用户预算匹配的预估区间，例如自定义人均 800 元时可输出 700-900元。
 15. 必须参考长期偏好记忆。如果长期记忆和本次表单冲突，以本次表单为准，并在 tips 中给出规避或替代建议。
-16. 必须参考天气工具结果。如果有降雨、高温或低温风险，要调整户外/室内节奏，并在 tips 中给出雨天、防晒或保暖建议。
+16. 天气工具结果只用于预报覆盖的日期。如有降雨、高温或低温风险，调整对应日期的安排并给出建议。其余日期不推测具体天气。
+17. 当天往返时，住宿区域填“无需住宿”，并写明原因。
 
 JSON 输出格式示例：
 {
@@ -174,27 +171,36 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
   ]);
 }
 
-function parseCachedTravelPlan(metadata: TravelCacheMetadata | undefined) {
-  if (!metadata?.travelPlanJson) {
+function isValidPlanResponse(value: unknown, expectedDays: number): value is TravelPlansResponse {
+  if (!value || typeof value !== "object" || !("plans" in value) || !Array.isArray(value.plans)) {
+    return false;
+  }
+
+  return value.plans.length > 0 && value.plans.every((plan: unknown) =>
+    isRenderableTravelPlan(plan) && validateTravelPlan(plan, { expectedDays }).passed);
+}
+
+function parseCachedTravelPlan(metadata: TravelCacheMetadata | undefined, requestKey: string, expectedDays: number) {
+  if (metadata?.requestKey !== requestKey || !metadata.travelPlanJson) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(metadata.travelPlanJson) as TravelPlansResponse;
-    return Array.isArray(parsed?.plans) && parsed.plans.length > 0 &&
-      parsed.plans.every(isRenderableTravelPlan) ? parsed : null;
+    const parsed: unknown = JSON.parse(metadata.travelPlanJson);
+    return isValidPlanResponse(parsed, expectedDays) ? parsed : null;
   } catch {
     console.warn("Cached travel plan JSON parse failed.");
     return null;
   }
 }
 
-async function queryTravelPlanCache(scope: string, embedding: number[]) {
+async function queryTravelPlanCache(scope: string, embedding: number[], requestKey: string, expectedDays: number) {
   try {
     const { vectorIndex } = await import("../../../lib/upstash");
     const results = await withTimeout(
       vectorIndex.namespace(scope).query<TravelCacheMetadata>({
         vector: embedding,
+        filter: `requestKey = '${requestKey}'`,
         topK: 1,
         includeMetadata: true,
       }),
@@ -208,7 +214,7 @@ async function queryTravelPlanCache(scope: string, embedding: number[]) {
       return null;
     }
 
-    const cachedTravelPlan = parseCachedTravelPlan(bestMatch.metadata);
+    const cachedTravelPlan = parseCachedTravelPlan(bestMatch.metadata, requestKey, expectedDays);
 
     if (!cachedTravelPlan) {
       return null;
@@ -240,14 +246,15 @@ async function generateTravelPlanWithLLM(
       ? completion.choices[0].message.content
       : "";
 
-  if (!outputText) {
-    throw new Error("DeepSeek returned an empty travel plan response.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch {
+    throw new RequestError(502, "AI 返回的行程无法读取，请重试。");
   }
 
-  const parsed = JSON.parse(outputText) as TravelPlansResponse;
-  if (!Array.isArray(parsed?.plans) || parsed.plans.length === 0 ||
-      !parsed.plans.every(isRenderableTravelPlan)) {
-    throw new RequestError(502, "AI 返回的行程不完整，请重试。");
+  if (!isValidPlanResponse(parsed, body.days)) {
+    throw new RequestError(502, `AI 未返回符合要求的 ${body.days} 天行程，请重试。`);
   }
   return parsed;
 }
@@ -255,15 +262,17 @@ async function generateTravelPlanWithLLM(
 async function upsertTravelPlanCache(
   scope: string,
   embedding: number[],
+  requestKey: string,
   travelPlan: TravelPlansResponse,
 ) {
   try {
     const { vectorIndex } = await import("../../../lib/upstash");
     await withTimeout(
       vectorIndex.namespace(scope).upsert<TravelCacheMetadata>({
-        id: crypto.randomUUID(),
+        id: requestKey,
         vector: embedding,
         metadata: {
+          requestKey,
           travelPlanJson: JSON.stringify(travelPlan),
           createdAt: new Date().toISOString(),
         },
@@ -296,7 +305,7 @@ export async function POST(request: Request) {
     let weather: DestinationWeather | null = null;
 
     try {
-      weather = await getDestinationWeather(normalizedBody.destination, normalizedBody.days);
+      weather = await getDestinationWeather(normalizedBody.destination, normalizedBody.days, normalizedBody.departureDate);
     } catch {
       console.warn("Weather service unavailable, continuing without forecast.");
     }
@@ -306,11 +315,12 @@ export async function POST(request: Request) {
       : null;
     if (scope) {
       const cacheKeyText = buildCacheKeyText(normalizedBody, weather);
+      const requestKey = createHash("sha256").update(cacheKeyText).digest("hex");
       const embedding = await generateEmbedding(cacheKeyText);
-      const cachedTravelPlan = await queryTravelPlanCache(scope, embedding);
+      const cachedTravelPlan = await queryTravelPlanCache(scope, embedding, requestKey, normalizedBody.days);
       if (cachedTravelPlan) return NextResponse.json(cachedTravelPlan);
       const travelPlan = await generateTravelPlanWithLLM(normalizedBody, weather, apiKey);
-      await upsertTravelPlanCache(scope, embedding, travelPlan);
+      await upsertTravelPlanCache(scope, embedding, requestKey, travelPlan);
       return NextResponse.json(travelPlan);
     }
     return NextResponse.json(await generateTravelPlanWithLLM(normalizedBody, weather, apiKey));

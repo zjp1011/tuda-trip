@@ -9,36 +9,27 @@ const budgets = [
 
 export default function BudgetPage() {
   return (
-    <div className="min-h-screen bg-[#070707] px-5 py-8 text-white sm:px-8 lg:px-12">
-      <div className="mx-auto max-w-6xl">
-        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
-          Budget Guide
+    <div className="tuda-subpage">
+      <header className="tuda-subpage-heading">
+        <h1>预算指南</h1>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--tuda-muted)]">
+          预算会影响住宿、交通、餐厅和景点安排。行程工作区也支持填写自定义人均金额。
         </p>
-        <h1 className="mt-2 text-3xl font-black">预算助手</h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-white/50">
-          预算会直接影响住宿区域、交通方式、餐厅密度和景点选择。首页也支持填写自定义人均金额。
-        </p>
+      </header>
 
-        <div className="mt-8 grid gap-4 md:grid-cols-2">
-          {budgets.map((budget) => (
-            <div
-              key={budget.title}
-              className="rounded-3xl border border-white/10 bg-white/[0.06] p-6 shadow-xl shadow-black/20 backdrop-blur-xl transition-all hover:-translate-y-1 hover:bg-white/[0.09]"
-            >
-              <p className="text-sm font-black text-orange-200">{budget.range}</p>
-              <h2 className="mt-3 text-xl font-black">{budget.title}</h2>
-              <p className="mt-3 text-sm leading-6 text-white/50">{budget.description}</p>
-            </div>
-          ))}
-        </div>
-
-        <Link
-          href="/"
-          className="mt-8 inline-flex rounded-full bg-white px-6 py-3 text-sm font-black text-slate-950 transition-all hover:-translate-y-0.5 hover:bg-orange-100"
-        >
-          返回首页填写预算
-        </Link>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        {budgets.map((budget) => (
+          <div key={budget.title} className="tuda-panel p-5 sm:p-6">
+            <p className="tuda-kicker">{budget.range}</p>
+            <h2 className="mt-3 text-lg font-bold">{budget.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--tuda-muted)]">{budget.description}</p>
+          </div>
+        ))}
       </div>
+
+      <Link href="/" className="tuda-button-primary mt-6">
+        去填写预算 <span aria-hidden="true">→</span>
+      </Link>
     </div>
   );
 }

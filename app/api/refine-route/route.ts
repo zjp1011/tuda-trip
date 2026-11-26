@@ -18,6 +18,7 @@ import { formatUserMemoryForPrompt, normalizeMemoryPreferences } from "../../../
 import {
   formatWeatherForPrompt,
   getDestinationWeather,
+  parseDepartureDate,
   type DestinationWeather,
 } from "../../../lib/weatherTool";
 import type { TravelPlan } from "../../../types/travel";
@@ -26,6 +27,7 @@ type RefineRouteRequestBody = {
   userId?: string;
   currentPlan?: TravelPlan;
   destination?: string;
+  departureDate?: string;
   instruction?: string;
   userMemoryPreferences?: string[];
 };
@@ -36,6 +38,8 @@ type RefineRouteResponse = {
 };
 
 type AgentExecutionContext = {
+  destination: string;
+  departureDate?: string;
   toolReport: TravelPlanToolReport;
   editScope: AgentEditScope;
   weather: DestinationWeather | null;
@@ -54,11 +58,14 @@ function buildRefinePrompt(
 用户修改指令：
 ${instruction}
 
+目的地：${executionContext.destination || "沿用原行程"}
+出发日期：${executionContext.departureDate ?? "未指定"}
+
 长期偏好记忆：
 ${formatUserMemoryForPrompt(userMemoryPreferences)}
 
 天气工具结果：
-${formatWeatherForPrompt(executionContext.weather)}
+${formatWeatherForPrompt(executionContext.weather, executionContext.departureDate)}
 
 内部工具分析结果：
 ${JSON.stringify(executionContext.toolReport, null, 2)}
@@ -88,7 +95,7 @@ ${JSON.stringify(currentPlan, null, 2)}
 13. 必须参考“本轮 Agent 工具动作”执行修改方向，例如预算约束、节奏优化、餐食替换或出片点规划。
 14. 必须参考长期偏好记忆。如果长期记忆和本次修改指令冲突，以本次修改指令为准。
 15. 如果“本轮编辑范围”为 single_day，必须尽量只修改 targetDayNumber 对应那一天；其它 days 的 schedule、theme、accommodation 应保持不变，除非为了预算或标题一致性必须轻微同步。
-16. 必须参考天气工具结果。如果用户提到天气、下雨、高温、太冷、防晒或保暖，要优先调整室内外安排，并在 tips 中写清楚原因。
+16. 天气工具结果只用于预报覆盖的日期。如果用户提到冷热或降雨，优先调整有对应预报的日期。其余日期不推测具体天气。
 
 输出格式：
 {
@@ -196,6 +203,10 @@ export async function POST(request: Request) {
     const body = await readJson<RefineRouteRequestBody>(request);
     const userId = session ?? requestUser(request, body.userId) ?? undefined;
     const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
+    const destination = typeof body.destination === "string" ? body.destination.trim().slice(0, 100) : "";
+    const departureDate = parseDepartureDate(body.departureDate);
+
+    if (departureDate === null) throw new RequestError(400, "出发日期无效，请重新选择。");
 
     if (!isRenderableTravelPlan(body.currentPlan)) {
       return NextResponse.json({ error: "currentPlan is required." }, { status: 400 });
@@ -215,13 +226,12 @@ export async function POST(request: Request) {
     let weather: DestinationWeather | null = null;
 
     try {
-      const destination = (typeof body.destination === "string" ? body.destination.trim() : "") || body.currentPlan.plan_title;
-      weather = await getDestinationWeather(destination.slice(0, 100), body.currentPlan.days.length);
+      weather = await getDestinationWeather(destination, body.currentPlan.days.length, departureDate);
     } catch {
       console.warn("Weather service unavailable, continuing without forecast.");
     }
 
-    const actions = buildAgentToolActions(body.currentPlan, instruction, toolReport);
+    const actions = buildAgentToolActions(body.currentPlan, instruction, toolReport, weather?.days.length);
     traceContext = {
       userId,
       instruction,
@@ -236,6 +246,8 @@ export async function POST(request: Request) {
       instruction,
       userMemoryPreferences,
       {
+        destination,
+        departureDate,
         toolReport,
         editScope,
         weather,

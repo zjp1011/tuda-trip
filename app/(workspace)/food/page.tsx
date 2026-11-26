@@ -11,35 +11,26 @@ const foodThemes = [
 
 export default function FoodPage() {
   return (
-    <div className="min-h-screen bg-[#070707] px-5 py-8 text-white sm:px-8 lg:px-12">
-      <div className="mx-auto max-w-6xl">
-        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
-          Food Map
+    <div className="tuda-subpage">
+      <header className="tuda-subpage-heading">
+        <h1>美食偏好</h1>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--tuda-muted)]">
+          在行程工作区选择口味，途搭会把餐厅、小吃和休息点排进每天的行程。
         </p>
-        <h1 className="mt-2 text-3xl font-black">美食地图</h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-white/50">
-          这些偏好已经能在首页生成路线时选择，AI 会把餐厅、小吃和休息点编进每天的时间轴。
-        </p>
+      </header>
 
-        <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {foodThemes.map((theme) => (
-            <div
-              key={theme.title}
-              className="rounded-3xl border border-white/10 bg-white/[0.06] p-6 shadow-xl shadow-black/20 backdrop-blur-xl transition-all hover:-translate-y-1 hover:bg-white/[0.09]"
-            >
-              <h2 className="text-xl font-black">{theme.title}</h2>
-              <p className="mt-3 text-sm leading-6 text-white/50">{theme.description}</p>
-            </div>
-          ))}
-        </div>
-
-        <Link
-          href="/"
-          className="mt-8 inline-flex rounded-full bg-gradient-to-r from-orange-400 to-red-400 px-6 py-3 text-sm font-black text-white shadow-xl shadow-orange-500/30 transition-all hover:-translate-y-0.5"
-        >
-          去生成含美食路线
-        </Link>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {foodThemes.map((theme) => (
+          <div key={theme.title} className="tuda-panel p-5 sm:p-6">
+            <h2 className="text-lg font-bold">{theme.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--tuda-muted)]">{theme.description}</p>
+          </div>
+        ))}
       </div>
+
+      <Link href="/" className="tuda-button-primary mt-6">
+        去规划行程 <span aria-hidden="true">→</span>
+      </Link>
     </div>
   );
 }

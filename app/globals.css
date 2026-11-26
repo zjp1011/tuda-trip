@@ -1,10 +1,441 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
+  --tuda-ink: #080f18;
+  --tuda-panel: #101b29;
+  --tuda-accent: #7ee8dd;
+  --tuda-text: #edf4f4;
+  --tuda-muted: #9daebd;
+  --tuda-line: rgba(166, 198, 214, 0.17);
+  --tuda-content-width: 86rem;
 }
 
 body {
   margin: 0;
-  background: #f4f4f5;
+  background: var(--tuda-ink);
+  color: var(--tuda-text);
+  font-family: "Inter", "Aptos", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid var(--tuda-accent);
+  outline-offset: 3px;
+}
+
+.tuda-panel {
+  border: 1px solid var(--tuda-line);
+  border-radius: 1rem;
+  background: var(--tuda-panel);
+}
+
+.tuda-kicker {
+  color: var(--tuda-accent);
+  font-size: 0.75rem;
+  font-weight: 720;
+  letter-spacing: 0.15em;
+}
+
+.tuda-button-primary,
+.tuda-button-secondary {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.625rem;
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  transition: background-color 150ms, border-color 150ms, color 150ms;
+}
+
+.tuda-button-primary {
+  border-color: rgba(194, 252, 244, 0.6);
+  background: var(--tuda-accent);
+  color: #092629;
+}
+
+.tuda-button-primary:hover:not(:disabled) {
+  background: #a6f6ec;
+}
+
+.tuda-button-secondary {
+  border-color: var(--tuda-line);
+  background: rgba(142, 185, 204, 0.05);
+  color: var(--tuda-text);
+}
+
+.tuda-button-secondary:hover:not(:disabled) {
+  border-color: rgba(126, 232, 221, 0.42);
+  background: rgba(126, 232, 221, 0.08);
+}
+
+.tuda-button-primary:disabled,
+.tuda-button-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.tuda-input {
+  min-width: 0;
+  min-height: 2.75rem;
+  border: 1px solid var(--tuda-line);
+  border-radius: 0.625rem;
+  background: #0a131e;
+  color: var(--tuda-text);
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+}
+
+.tuda-input::placeholder {
+  color: #8294a5;
+}
+
+.tuda-input:focus {
+  border-color: var(--tuda-accent);
+  outline: 2px solid rgba(126, 232, 221, 0.22);
+  outline-offset: 1px;
+}
+
+.tuda-shell {
+  display: flex;
+  height: 100dvh;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--tuda-ink);
+}
+
+.tuda-content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.tuda-subpage {
+  max-width: var(--tuda-content-width);
+  margin-inline: auto;
+  padding: clamp(1.5rem, 5vw, 4rem) clamp(1rem, 4vw, 3rem);
+}
+
+.tuda-subpage-heading {
+  border-bottom: 1px solid var(--tuda-line);
+  padding-bottom: 1.5rem;
+}
+
+.tuda-subpage-heading h1 {
+  font-size: clamp(2rem, 4vw, 3rem);
+  font-weight: 750;
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+}
+
+.tuda-sidebar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  border-bottom: 1px solid var(--tuda-line);
+  background: #0b1420;
+}
+
+.tuda-sidebar-head {
+  display: flex;
+  min-height: 3.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 1rem;
+}
+
+.tuda-brand {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--tuda-text);
+}
+
+.tuda-mark {
+  position: relative;
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  border: 1px solid #416768;
+  border-radius: 0.625rem;
+  background: #132a30;
+  color: var(--tuda-accent);
+}
+
+.tuda-mark::before {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  content: "";
+  translate: 0 -1px;
+  rotate: -12deg;
+}
+
+.tuda-mark::after {
+  position: absolute;
+  width: 0.875rem;
+  height: 2px;
+  border-radius: 1rem;
+  background: currentColor;
+  content: "";
+  rotate: -55deg;
+}
+
+.tuda-nav {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  padding: 0 0.75rem 0.5rem;
+  scrollbar-width: thin;
+}
+
+.tuda-nav-link {
+  position: relative;
+  display: flex;
+  min-height: 2.5rem;
+  flex: none;
+  align-items: center;
+  gap: 0.625rem;
+  border: 1px solid transparent;
+  border-radius: 0.625rem;
+  color: var(--tuda-muted);
+  padding: 0.5rem 0.625rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tuda-nav-link:hover {
+  background: rgba(142, 185, 204, 0.06);
+  color: var(--tuda-text);
+}
+
+.tuda-nav-link[aria-current="page"] {
+  border-color: rgba(126, 232, 221, 0.22);
+  background: rgba(126, 232, 221, 0.08);
+  color: var(--tuda-accent);
+}
+
+.tuda-nav-symbol {
+  position: relative;
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+  border: 1px solid currentColor;
+  border-radius: 0.2rem;
+  opacity: 0.78;
+}
+
+.tuda-nav-symbol[data-icon="route"] {
+  border-radius: 50%;
+}
+
+.tuda-nav-symbol[data-icon="route"]::after {
+  position: absolute;
+  inset: 0.16rem;
+  background: currentColor;
+  clip-path: polygon(0 45%, 100% 0, 55% 100%, 38% 62%);
+  content: "";
+}
+
+.tuda-nav-symbol[data-icon="pin"] {
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-inline: 0.0875rem;
+  border-radius: 50% 50% 50% 0;
+  rotate: -45deg;
+}
+
+.tuda-nav-symbol[data-icon="food"] {
+  height: 0.65rem;
+  border-radius: 0 0 0.45rem 0.45rem;
+  transform: translateY(1px);
+}
+
+.tuda-nav-symbol[data-icon="book"] {
+  border-left-width: 3px;
+}
+
+.tuda-nav-symbol[data-icon="budget"]::after {
+  position: absolute;
+  right: 0.12rem;
+  bottom: 0.18rem;
+  left: 0.12rem;
+  height: 1px;
+  background: currentColor;
+  box-shadow: 0 -0.22rem currentColor;
+  content: "";
+}
+
+.tuda-sidebar-footer {
+  display: none;
+}
+
+.tuda-credential {
+  border-bottom: 1px solid var(--tuda-line);
+  background: #0b1520;
+}
+
+.tuda-credential-inner {
+  display: flex;
+  max-width: var(--tuda-content-width);
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-inline: auto;
+  padding: 0.75rem 1rem;
+}
+
+.tuda-credential-field {
+  display: flex;
+  min-width: 0;
+  gap: 0.5rem;
+}
+
+.tuda-credential-field .tuda-input {
+  min-height: 2.375rem;
+  flex: 1;
+  padding-block: 0.5rem;
+}
+
+.tuda-credential-field .tuda-button-secondary {
+  min-height: 2.375rem;
+  padding-block: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.tuda-signin {
+  min-height: 100dvh;
+  background:
+    linear-gradient(90deg, rgba(7, 15, 24, 0.94), rgba(7, 15, 24, 0.42) 66%, rgba(7, 15, 24, 0.55)),
+    url("/tuda-alpine.webp") 67% center / cover no-repeat,
+    var(--tuda-ink);
+}
+
+.tuda-signin-inner {
+  display: grid;
+  min-height: 100dvh;
+  max-width: 81rem;
+  align-content: center;
+  gap: clamp(2rem, 6vw, 5.5rem);
+  margin-inline: auto;
+  padding: 2rem clamp(1.25rem, 6vw, 5rem);
+}
+
+.tuda-signin-heading {
+  margin: clamp(2rem, 5vw, 3.5rem) 0 0;
+  color: var(--tuda-text);
+  font-size: clamp(2.25rem, 5.2vw, 5rem);
+  font-weight: 750;
+  line-height: 1.13;
+  letter-spacing: -0.05em;
+}
+
+.tuda-signin-card {
+  align-self: center;
+  border-color: rgba(166, 198, 214, 0.26);
+  background: #101c29f5;
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+  box-shadow: 0 1.5rem 5rem rgba(3, 8, 14, 0.28);
+}
+
+@media (max-width: 39.999rem) {
+  .tuda-nav {
+    gap: 0.125rem;
+    padding-inline: 0.5rem;
+  }
+
+  .tuda-nav-link {
+    padding-inline: 0.375rem;
+    font-size: 0.75rem;
+  }
+
+  .tuda-nav-symbol {
+    display: none;
+  }
+}
+
+@media (min-width: 40rem) {
+  .tuda-credential-inner {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding-inline: 2rem;
+  }
+
+  .tuda-credential-field {
+    width: min(100%, 20rem);
+  }
+}
+
+@media (min-width: 53rem) {
+  .tuda-signin-inner {
+    grid-template-columns: minmax(0, 1fr) minmax(19rem, 26rem);
+    align-items: center;
+  }
+}
+
+@media (min-width: 64rem) {
+  .tuda-shell {
+    flex-direction: row;
+  }
+
+  .tuda-sidebar {
+    width: 13.5rem;
+    justify-content: flex-start;
+    border-right: 1px solid var(--tuda-line);
+    border-bottom: 0;
+  }
+
+  .tuda-sidebar-head {
+    min-height: 5.5rem;
+    padding: 1.25rem 1rem;
+  }
+
+  .tuda-nav {
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.75rem;
+  }
+
+  .tuda-nav-link {
+    min-height: 2.75rem;
+    gap: 0.75rem;
+    padding-inline: 0.75rem;
+  }
+
+  .tuda-nav-link[aria-current="page"]::after {
+    position: absolute;
+    top: 0.625rem;
+    right: 0.625rem;
+    bottom: 0.625rem;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--tuda-accent);
+    content: "";
+  }
+
+  .tuda-sidebar-footer {
+    display: block;
+    margin: auto 1rem 0;
+    border-top: 1px solid var(--tuda-line);
+    padding-block: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tuda-button-primary,
+  .tuda-button-secondary {
+    transition: none;
+  }
 }

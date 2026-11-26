@@ -15,28 +15,32 @@ type ItineraryAgentPanelProps = {
   userId?: string;
   plan: TravelPlan;
   destination?: string;
+  departureDate?: string;
   memoryPreferences?: string[];
   onPlanUpdated: (plan: TravelPlan, reply: string) => void;
 };
 
 const quickInstructions = [
   "根据体检结果，帮我优化这份路线",
-  "第二天太累了，帮我改松弛一点",
+  "减少赶路，让行程松弛一点",
   "我不想吃火锅，换成本地小吃",
   "加一个适合拍照的日落点",
   "把预算控制在人均 1200 元以内",
-  "根据天气调整室内外安排",
 ];
 
 export default function ItineraryAgentPanel({
   userId = "",
   plan,
   destination = "",
+  departureDate = "",
   memoryPreferences = [],
   onPlanUpdated,
 }: ItineraryAgentPanelProps) {
   const requestDeepSeek = useDeepSeekRequest();
   const toolReport = analyzeTravelPlan(plan);
+  const suggestedInstructions = departureDate
+    ? [...quickInstructions, "根据天气调整室内外安排"]
+    : quickInstructions;
   const [instruction, setInstruction] = useState("");
   const [messages, setMessages] = useState<AgentMessage[]>([
     {
@@ -68,6 +72,7 @@ export default function ItineraryAgentPanel({
         userId,
         currentPlan: plan,
         destination,
+        departureDate,
         instruction: trimmedInstruction,
         userMemoryPreferences: memoryPreferences,
       });
@@ -110,7 +115,7 @@ export default function ItineraryAgentPanel({
         ...currentMessages,
         {
           role: "assistant",
-          content: `${reply} 修改后的路线已更新到下方，记得收藏最新版。`,
+          content: `${reply} 行程已更新，可以收藏或撤销这次修改。`,
         },
       ]);
     } catch (error) {
@@ -134,7 +139,7 @@ export default function ItineraryAgentPanel({
     <section className="mx-auto mb-6 w-full max-w-6xl rounded-[2rem] border border-white/10 bg-white/[0.06] p-5 text-white shadow-2xl shadow-black/30 backdrop-blur-2xl sm:p-6">
       <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.24em] text-orange-200">
+          <p className="text-xs font-bold uppercase tracking-[0.24em] text-teal-200">
             AI Trip Agent
           </p>
           <h3 className="mt-3 text-2xl font-black">AI 行程管家</h3>
@@ -145,15 +150,15 @@ export default function ItineraryAgentPanel({
           <div className="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
             <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3">
               <p className="text-xs font-semibold text-white/40">节奏判断</p>
-              <p className="mt-1 text-lg font-black text-orange-200">{toolReport.paceLabel}</p>
+              <p className="mt-1 text-lg font-black text-teal-200">{toolReport.paceLabel}</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3">
               <p className="text-xs font-semibold text-white/40">美食节点</p>
-              <p className="mt-1 text-lg font-black text-orange-200">{toolReport.totalFoodCount} 个</p>
+              <p className="mt-1 text-lg font-black text-teal-200">{toolReport.totalFoodCount} 个</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3">
               <p className="text-xs font-semibold text-white/40">休整节点</p>
-              <p className="mt-1 text-lg font-black text-orange-200">{toolReport.totalRestCount} 个</p>
+              <p className="mt-1 text-lg font-black text-teal-200">{toolReport.totalRestCount} 个</p>
             </div>
           </div>
 
@@ -173,8 +178,8 @@ export default function ItineraryAgentPanel({
           </div>
 
           {memoryPreferences.length > 0 ? (
-            <div className="mt-4 rounded-2xl border border-orange-200/15 bg-orange-300/10 p-4">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-100/60">
+            <div className="mt-4 rounded-2xl border border-teal-200/15 bg-teal-300/10 p-4">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-teal-100/60">
                 Memory Used
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -191,7 +196,7 @@ export default function ItineraryAgentPanel({
           ) : null}
 
           <div className="mt-5 flex flex-wrap gap-2">
-            {quickInstructions.map((quickInstruction) => (
+            {suggestedInstructions.map((quickInstruction) => (
               <button
                 key={quickInstruction}
                 type="button"
@@ -252,8 +257,8 @@ export default function ItineraryAgentPanel({
 
         <div className="rounded-[1.5rem] border border-white/10 bg-black/25 p-4">
           {lastActions.length > 0 ? (
-            <div className="mb-4 rounded-2xl border border-orange-200/15 bg-orange-300/10 p-4">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-100/60">
+            <div className="mb-4 rounded-2xl border border-teal-200/15 bg-teal-300/10 p-4">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-teal-100/60">
                 Agent Run
               </p>
               <div className="mt-3 grid gap-2">
@@ -264,8 +269,10 @@ export default function ItineraryAgentPanel({
                   >
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs font-black text-white">{action.label}</p>
-                      <span className="rounded-full bg-emerald-300/15 px-2 py-1 text-[10px] font-black text-emerald-200">
-                        DONE
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${action.status === "skipped"
+                        ? "bg-white/10 text-white/65"
+                        : "bg-emerald-300/15 text-emerald-200"}`}>
+                        {action.status === "skipped" ? "已跳过" : "完成"}
                       </span>
                     </div>
                     <p className="mt-1 text-xs leading-5 text-white/50">{action.detail}</p>
@@ -281,7 +288,7 @@ export default function ItineraryAgentPanel({
                 key={`${message.role}-${index}`}
                 className={`rounded-2xl px-4 py-3 text-sm leading-6 ${
                   message.role === "user"
-                    ? "ml-8 bg-orange-400 text-white"
+                    ? "ml-8 bg-teal-400 text-slate-950"
                     : "mr-8 bg-white/10 text-white/70"
                 }`}
               >
@@ -301,12 +308,12 @@ export default function ItineraryAgentPanel({
               value={instruction}
               onChange={(event) => setInstruction(event.target.value)}
               placeholder="例如：把第 3 天改成亲子友好一点"
-              className="min-w-0 flex-1 rounded-full border border-white/10 bg-white/10 px-5 py-3 text-sm font-semibold text-white outline-none placeholder:text-white/35 focus:border-orange-300/50"
+              className="min-w-0 flex-1 rounded-full border border-white/10 bg-white/10 px-5 py-3 text-sm font-semibold text-white outline-none placeholder:text-white/35 focus:border-teal-300/50"
             />
             <button
               type="submit"
               disabled={isRefining || !instruction.trim()}
-              className="rounded-full bg-white px-6 py-3 text-sm font-black text-slate-950 transition-all hover:-translate-y-0.5 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-full bg-white px-6 py-3 text-sm font-black text-slate-950 transition-all hover:-translate-y-0.5 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isRefining ? "修改中..." : "让它修改"}
             </button>

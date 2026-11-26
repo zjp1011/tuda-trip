@@ -1,8 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useDeepSeekRequest } from "@/components/DeepSeekKey";
 import ItineraryAgentPanel from "@/components/ItineraryAgentPanel";
 import PlanDisplay from "@/components/PlanDisplay";
@@ -11,578 +10,367 @@ import UserMemoryPanel from "@/components/UserMemoryPanel";
 import WeatherInsightCard from "@/components/WeatherInsightCard";
 import { useUser } from "@/hooks/useUser";
 import { downloadTravelPlanHtml } from "@/lib/exportTravelPlan";
+import {
+  readItineraryDraft, writeItineraryDraft,
+  type ItineraryContext, type ItineraryDraft, type ItinerarySnapshot,
+} from "@/lib/itineraryDraft";
 import type { SavedTrip } from "@/lib/savedTrips";
 import { buildShareUrl, isLocalShareUrl } from "@/lib/shareUrl";
 import { defaultUserMemory, type UserMemory } from "@/lib/userMemory";
 import type { TravelPlan, TravelPlansResponse } from "@/types/travel";
+import styles from "./page.module.css";
 
-type CompanionType = "单人" | "情侣" | "亲子" | "朋友";
-type BudgetPreference = "经济实惠" | "舒适预算" | "品质享受" | "不设上限";
-
-const companionOptions: CompanionType[] = ["单人", "情侣", "亲子", "朋友"];
-
-const budgetOptions: Array<{
-  label: BudgetPreference;
-  description: string;
-}> = [
-  { label: "经济实惠", description: "500元以内/人" },
-  { label: "舒适预算", description: "500-1500元/人" },
-  { label: "品质享受", description: "1500-3000元/人" },
-  { label: "不设上限", description: "3000元以上/人" },
-];
-
-const styleChips = ["历史文化", "自然风光", "特色街区", "美食探索", "松弛度假", "亲子友好"];
-const foodPreferenceOptions = ["地道小吃", "网红餐厅", "夜市探店", "特色火锅", "甜品咖啡", "本地老店"];
-
+const companions = ["单人", "情侣", "亲子", "朋友"] as const;
+const budgets = [
+  { value: "经济实惠", label: "500 元以内" },
+  { value: "舒适预算", label: "500–1500 元" },
+  { value: "品质享受", label: "1500–3000 元" },
+  { value: "不设上限", label: "3000 元以上" },
+] as const;
+const travelOptions = ["历史文化", "自然风光", "特色街区", "美食探索", "松弛度假", "亲子友好"];
+const foodOptions = ["地道小吃", "网红餐厅", "夜市探店", "特色火锅", "甜品咖啡", "本地老店"];
 const destinations = [
-  { icon: "慢游", city: "成都", description: "火锅、茶馆与街巷慢生活。" },
-  { icon: "海风", city: "厦门", description: "海风、老别墅与岛屿日落。" },
-  { icon: "山海", city: "大理", description: "苍山洱海旁的松弛假期。" },
-  { icon: "夜景", city: "上海", description: "城市漫游、展览与夜景。" },
+  { city: "成都", detail: "茶馆与街巷慢生活" },
+  { city: "厦门", detail: "海风与岛屿日落" },
+  { city: "大理", detail: "山海之间的轻度假" },
+  { city: "上海", detail: "展览、街区与夜景" },
 ];
+
+const initialDraft: ItineraryDraft = {
+  form: {
+    destination: "", days: "3", departureDate: "", companion: "朋友",
+    budgetPreference: "舒适预算", customBudget: "", travelStyles: ["自然风光"],
+    foodPreferences: [], customFoodPreference: "",
+  },
+  current: null,
+  previous: null,
+};
+
+async function readResponse<T>(response: Response, fallback: string): Promise<T> {
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data) {
+    throw new Error(typeof data?.error === "string" ? data.error : fallback);
+  }
+  return data as T;
+}
 
 export default function Home() {
   const router = useRouter();
   const requestDeepSeek = useDeepSeekRequest();
   const { guestId } = useUser();
-  const [destination, setDestination] = useState("");
-  const [days, setDays] = useState("3");
-  const [companion, setCompanion] = useState<CompanionType>("朋友");
-  const [budgetPreference, setBudgetPreference] = useState<BudgetPreference>("舒适预算");
-  const [customBudget, setCustomBudget] = useState("");
-  const [travelStyles, setTravelStyles] = useState<string[]>(["自然风光"]);
-  const [foodPreferences, setFoodPreferences] = useState<string[]>([]);
-  const [customFoodPreference, setCustomFoodPreference] = useState("");
-  const [plan, setPlan] = useState<TravelPlan | null>(null);
+  const [draft, setDraft] = useState(initialDraft);
+  const [ready, setReady] = useState(false);
+  const [storageAvailable, setStorageAvailable] = useState(true);
   const [userMemory, setUserMemory] = useState<UserMemory>(defaultUserMemory);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [saveMessage, setSaveMessage] = useState("");
-  const [shareMessage, setShareMessage] = useState("");
-  const [hasUnsavedAgentChanges, setHasUnsavedAgentChanges] = useState(false);
+  const [generation, setGeneration] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [resultAction, setResultAction] = useState<"save" | "share" | null>(null);
+  const [resultFeedback, setResultFeedback] = useState<{ text: string; error?: boolean } | null>(null);
+  const [shareLink, setShareLink] = useState("");
+  const { form, current, previous } = draft;
+  const submittedPreferencesDiffer = Boolean(current && (
+    current.context.destination !== form.destination.trim() ||
+    current.context.days !== Number(form.days) ||
+    current.context.departureDate !== form.departureDate
+  ));
 
   useEffect(() => {
-    const city = new URLSearchParams(window.location.search).get("city");
-
-    if (city) {
-      setDestination(city);
-    }
+    const restored = readItineraryDraft() ?? initialDraft;
+    const city = new URLSearchParams(window.location.search).get("city")?.trim().slice(0, 100);
+    setDraft(city ? { ...restored, form: { ...restored.form, destination: city } } : restored);
+    setReady(true);
   }, []);
 
-  const toggleTravelStyle = (style: string) => {
-    setTravelStyles((currentStyles) => {
-      if (currentStyles.includes(style)) {
-        return currentStyles.filter((currentStyle) => currentStyle !== style);
-      }
+  useEffect(() => {
+    if (ready) setStorageAvailable(writeItineraryDraft(draft));
+  }, [ready, draft]);
 
-      if (currentStyles.length >= 3) {
-        return currentStyles;
-      }
+  useEffect(() => {
+    if (generation === 0) return;
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth";
+    document.getElementById("generated-plan")?.scrollIntoView({ behavior: motion, block: "start" });
+  }, [generation]);
 
-      return [...currentStyles, style];
-    });
-  };
+  function updateForm<K extends keyof ItineraryDraft["form"]>(key: K, value: ItineraryDraft["form"][K]) {
+    setDraft((state) => ({ ...state, form: { ...state.form, [key]: value } }));
+  }
 
-  const toggleFoodPreference = (preference: string) => {
-    setFoodPreferences((currentPreferences) =>
-      currentPreferences.includes(preference)
-        ? currentPreferences.filter((currentPreference) => currentPreference !== preference)
-        : [...currentPreferences, preference],
-    );
-  };
+  function selectDestination(city: string) {
+    updateForm("destination", city);
+    document.getElementById("trip-destination")?.focus();
+  }
 
-  const updateCustomBudget = (value: string) => {
-    setCustomBudget(value.replace(/[^\d]/g, ""));
-  };
-
-  const saveCurrentPlan = async () => {
-    if (!plan) {
-      return;
-    }
-
-    if (!guestId) {
-      setErrorMessage("游客身份初始化中，请稍后再收藏。");
-      return;
-    }
-
-    setErrorMessage("");
-    setSaveMessage("");
-
-    try {
-      const response = await fetch("/api/save-route", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          userId: guestId,
-          destination: destination || "未命名目的地",
-          plan,
-        }),
-      });
-
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as {
-          error?: string;
-          details?: string;
-        } | null;
-        setErrorMessage(data?.details ?? data?.error ?? "收藏行程失败");
-        return;
-      }
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "收藏行程失败");
-      return;
-    }
-
-    setHasUnsavedAgentChanges(false);
-    setSaveMessage("已收藏最新版，正在前往我的行程。");
-    router.push("/diary");
-  };
-
-  const copyTextToClipboard = async (text: string) => {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "true");
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textarea);
-  };
-
-  const shareCurrentPlan = async () => {
-    if (!plan) {
-      return;
-    }
-
-    setErrorMessage("");
-    setShareMessage("");
-
-    try {
-      const savedTrip: SavedTrip = {
-        id: crypto.randomUUID(),
-        title: plan.plan_title,
-        destination: destination || "未命名目的地",
-        createdAt: new Date().toISOString(),
-        plan,
-      };
-
-      const response = await fetch("/api/share-route", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ savedTrip }),
-      });
-      const data = (await response.json()) as {
-        sharedRoute?: { id: string };
-        error?: string;
-        details?: string;
-      };
-
-      if (!response.ok || !data.sharedRoute) {
-        throw new Error(data.details ?? data.error ?? "创建分享链接失败");
-      }
-
-      const shareUrl = buildShareUrl(data.sharedRoute.id);
-      await copyTextToClipboard(shareUrl);
-      setShareMessage(
-        isLocalShareUrl(shareUrl)
-          ? "本地分享链接已复制，但 localhost 只能在你这台电脑打开；外发需要先部署或配置公网访问地址。"
-          : "分享链接已复制，可以直接发给朋友查看。",
-      );
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "创建分享链接失败");
-    }
-  };
-
-  const updatePlanFromAgent = (nextPlan: TravelPlan, reply: string) => {
-    setPlan(nextPlan);
-    setHasUnsavedAgentChanges(true);
-    setSaveMessage(`${reply} 当前修改尚未收藏。`);
-  };
-
-  const downloadPlan = () => {
-    if (!plan) {
-      return;
-    }
-
-    downloadTravelPlanHtml(plan);
-  };
-
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setIsGenerating(true);
+    if (isGenerating) return;
+    const context: ItineraryContext = {
+      destination: form.destination.trim(), days: Number(form.days), departureDate: form.departureDate,
+    };
+    if (!context.destination) {
+      setErrorMessage("请填写旅行目的地。");
+      return;
+    }
     setErrorMessage("");
+    setIsGenerating(true);
 
     try {
       const response = await requestDeepSeek("generate", {
-        userId: guestId,
-        userMemoryPreferences: userMemory.preferences,
-        destination,
-        days: Number(days),
-        companion,
-        budgetPreference,
-        customBudget,
-        travelStyles,
-        foodPreferences,
-        customFoodPreference,
+        ...form, ...context, userId: guestId, userMemoryPreferences: userMemory.preferences,
       });
-
-      const responseText = await response.text();
-      let data: TravelPlansResponse | { error?: string; details?: string } | null = null;
-
-      if (responseText) {
-        try {
-          data = JSON.parse(responseText) as TravelPlansResponse | {
-            error?: string;
-            details?: string;
-          };
-        } catch {
-          throw new Error("接口返回了非 JSON 内容，请查看服务端日志。");
-        }
+      const data = await readResponse<TravelPlansResponse>(response, "暂时无法生成行程，请稍后重试。");
+      const plan = data.plans?.[0];
+      if (!plan?.days || plan.days.length !== context.days) {
+        throw new Error("生成的行程天数与所选天数不符，请重试。");
       }
-
-      if (!response.ok) {
-        const errorText =
-          data && "error" in data && data.error
-            ? data.details
-              ? `${data.error}: ${data.details}`
-              : data.error
-            : "生成旅行方案失败";
-        throw new Error(errorText);
-      }
-
-      if (!data || !("plans" in data) || !data.plans[0]) {
-        throw new Error("接口没有返回可展示的行程。");
-      }
-
-      setPlan(data.plans[0]);
-      setHasUnsavedAgentChanges(false);
-      setSaveMessage("");
-      setShareMessage("");
-      window.setTimeout(() => {
-        document.getElementById("generated-plan")?.scrollIntoView({ behavior: "smooth" });
-      }, 80);
+      setDraft((state) => ({ ...state, current: { context, plan }, previous: null }));
+      setResultFeedback(null);
+      setShareLink("");
+      setGeneration((value) => value + 1);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "生成旅行方案失败");
+      setErrorMessage(error instanceof Error ? error.message : "暂时无法生成行程。");
     } finally {
       setIsGenerating(false);
     }
-  };
+  }
+
+  function updatePlanFromAgent(source: ItinerarySnapshot, plan: TravelPlan) {
+    setDraft((state) => {
+      if (state.current !== source) return state;
+      return { ...state, current: { context: source.context, plan }, previous: source };
+    });
+    setResultFeedback(null);
+    setShareLink("");
+  }
+
+  function undoLastEdit() {
+    setDraft((state) => state.previous
+      ? { ...state, current: state.previous, previous: null }
+      : state);
+    setResultFeedback({ text: "已恢复上一次修改前的行程。" });
+    setShareLink("");
+    setGeneration((value) => value + 1);
+  }
+
+  async function savePlan(snapshot: ItinerarySnapshot) {
+    if (!guestId) {
+      setResultFeedback({ text: "正在初始化访客身份，请稍后再收藏。", error: true });
+      return;
+    }
+    setResultAction("save");
+    setResultFeedback(null);
+    try {
+      const response = await fetch("/api/save-route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: guestId, destination: snapshot.context.destination,
+          departureDate: snapshot.context.departureDate, plan: snapshot.plan,
+        }),
+      });
+      await readResponse(response, "收藏行程失败，请重试。");
+      router.push("/diary");
+    } catch (error) {
+      setResultFeedback({ text: error instanceof Error ? error.message : "收藏行程失败，请重试。", error: true });
+    } finally {
+      setResultAction(null);
+    }
+  }
+
+  async function sharePlan(snapshot: ItinerarySnapshot) {
+    setResultAction("share");
+    setResultFeedback(null);
+    try {
+      const savedTrip: SavedTrip = {
+        id: crypto.randomUUID(), title: snapshot.plan.plan_title, destination: snapshot.context.destination,
+        ...(snapshot.context.departureDate ? { departureDate: snapshot.context.departureDate } : {}),
+        createdAt: new Date().toISOString(), plan: snapshot.plan,
+      };
+      const response = await fetch("/api/share-route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedTrip }),
+      });
+      const data = await readResponse<{ sharedRoute?: { id: string } }>(response, "暂时无法创建分享链接。");
+      if (!data.sharedRoute?.id) throw new Error("暂时无法创建分享链接。");
+      const link = buildShareUrl(data.sharedRoute.id);
+      setShareLink(link);
+      if (isLocalShareUrl(link)) {
+        setResultFeedback({ text: "已创建本机分享链接，可在部署后分享公网版本。" });
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(link);
+        setResultFeedback({ text: "已复制分享地址，持有链接的朋友可以查看。" });
+      } catch {
+        setResultFeedback({ text: "分享链接已生成，可从输入框手动复制。" });
+      }
+    } catch (error) {
+      setResultFeedback({ text: error instanceof Error ? error.message : "暂时无法创建分享链接。", error: true });
+    } finally {
+      setResultAction(null);
+    }
+  }
 
   return (
-    <div
-      className="min-h-screen bg-cover bg-center text-white"
-      style={{
-        backgroundImage:
-          "linear-gradient(to bottom, rgb(0 0 0 / 0.58), rgb(0 0 0 / 0.86)), url('https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=2400&q=85')",
-      }}
-    >
-      <form onSubmit={handleSubmit}>
-        <section className="px-5 py-10 sm:px-8 lg:px-12">
-          <div className="mx-auto flex w-full max-w-6xl flex-col items-center text-center">
-            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-orange-200">
-              AI Travel Planner
-            </p>
-            <h1 className="mt-5 max-w-4xl text-4xl font-black tracking-normal sm:text-5xl lg:text-6xl">
-              踏上新的旅程
-            </h1>
-            <p className="mt-5 max-w-2xl text-base font-light leading-7 text-gray-200 sm:text-lg">
-              从目的地到每日路线，用一个清晰的偏好输入，生成更懂你的旅行计划。
-            </p>
+    <div className={styles.home}>
+      <section className={styles.hero} aria-labelledby="trip-title">
+        <div className={styles.heroContent}>
+          <p className="tuda-kicker">途搭 / AI 旅行规划</p>
+          <h1 id="trip-title">你的下一站，<br /><span>从这里出发。</span></h1>
+          <p className={styles.heroLead}>把目的地、日期和偏好交给途搭，安排一份适合你们的每日路线。</p>
+          {current ? <a href="#generated-plan" className={styles.continueLink}>继续查看行程 <span aria-hidden="true">↘</span></a> : null}
+        </div>
+      </section>
 
-            <div className="mt-10 flex w-full max-w-4xl flex-col gap-3 rounded-[2rem] border border-white/20 bg-white/10 p-3 shadow-2xl shadow-black/20 backdrop-blur-md sm:rounded-full lg:flex-row lg:items-center">
-              <label className="flex min-w-0 flex-1 items-center gap-3 rounded-full bg-white/10 px-5 py-4 text-left">
-                <span className="text-white/70">搜索</span>
-                <input
-                  value={destination}
-                  onChange={(event) => setDestination(event.target.value)}
-                  placeholder="想去哪里？例如 成都"
-                  required
-                  className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-white outline-none placeholder:text-white/55"
-                />
-              </label>
-
-              <label className="flex items-center gap-3 rounded-full bg-white/10 px-5 py-4 text-left lg:w-44">
-                <span className="text-sm font-semibold text-white/70">天数</span>
-                <select
-                  value={days}
-                  onChange={(event) => setDays(event.target.value)}
-                  className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none [&>option]:text-gray-950"
-                >
-                  {Array.from({ length: 7 }, (_, index) => `${index + 1}`).map((day) => (
-                    <option key={day} value={day}>
-                      {day} 天
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <button
-                type="submit"
-                disabled={isGenerating}
-                className="rounded-full bg-gradient-to-r from-orange-400 to-red-400 px-7 py-4 text-sm font-black text-white shadow-xl shadow-orange-500/30 transition-all hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-orange-500/40 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {isGenerating ? "生成中..." : "生成路线"}
-              </button>
+      <div className={styles.content}>
+        <form className={styles.planner} onSubmit={handleSubmit} aria-busy={isGenerating}>
+          <div className={styles.plannerHeading}>
+            <div>
+              <h2>规划行程</h2>
+              <p>选好去哪、哪天出发，再按你的预算和节奏细调。</p>
             </div>
-
-            {errorMessage ? (
-              <p className="mt-4 max-w-4xl rounded-2xl border border-red-300/30 bg-red-500/15 px-5 py-3 text-sm font-semibold text-red-100 backdrop-blur-md">
-                {errorMessage}
-              </p>
+            {ready && (form.destination || current) ? (
+              <span className={styles.draftStatus}>{storageAvailable ? "草稿保存在本机" : "本机草稿暂时无法保存"}</span>
             ) : null}
           </div>
-        </section>
 
-        <section className="px-5 pb-8 sm:px-8 lg:px-12">
-          <div className="mx-auto grid w-full max-w-6xl gap-4 lg:grid-cols-3">
-            <div className="rounded-3xl border border-white/15 bg-black/35 p-5 text-left backdrop-blur-md">
-              <p className="text-sm font-black">同行人员</p>
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                {companionOptions.map((option) => {
-                  const isSelected = companion === option;
+          <div className={styles.primaryFields}>
+            <label className={styles.field}>
+              <span>目的地</span>
+              <input id="trip-destination" className="tuda-input" value={form.destination}
+                onChange={(event) => updateForm("destination", event.target.value)}
+                placeholder="想去哪里？例如 成都" maxLength={100} required />
+            </label>
+            <label className={styles.field}>
+              <span>出发日期 <small>选填</small></span>
+              <input aria-label="出发日期" type="date" className="tuda-input" value={form.departureDate}
+                onChange={(event) => updateForm("departureDate", event.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span>游玩天数</span>
+              <select value={form.days} className="tuda-input" onChange={(event) => updateForm("days", event.target.value)}>
+                {Array.from({ length: 7 }, (_, index) => index + 1).map((day) => <option key={day} value={day}>{day} 天</option>)}
+              </select>
+            </label>
+            <button className={"tuda-button-primary " + styles.generate} type="submit" disabled={!ready || isGenerating}>
+              {isGenerating ? "正在规划…" : "生成行程"} <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+          {errorMessage ? <p role="alert" className={styles.error}>{errorMessage}</p> : null}
 
-                  return (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => setCompanion(option)}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold transition-all ${
-                        isSelected ? "bg-white text-gray-950" : "bg-white/10 text-white hover:bg-white/20"
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+          <div className={styles.quickDestinations}>
+            <span>热门目的地</span>
+            {destinations.map(({ city, detail }) => (
+              <button type="button" key={city} title={detail} aria-pressed={form.destination.trim() === city}
+                className={styles.chip} onClick={() => selectDestination(city)}>{city}</button>
+            ))}
+          </div>
 
-            <div className="rounded-3xl border border-white/15 bg-black/35 p-5 text-left backdrop-blur-md">
-              <p className="text-sm font-black">人均预算</p>
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                {budgetOptions.map((option) => {
-                  const isSelected = budgetPreference === option.label;
-
-                  return (
-                    <button
-                      key={option.label}
-                      type="button"
-                      onClick={() => setBudgetPreference(option.label)}
-                      className={`rounded-2xl px-3 py-2 text-left transition-all ${
-                        isSelected ? "bg-orange-400 text-white" : "bg-white/10 text-white hover:bg-white/20"
-                      }`}
-                    >
-                      <span className="block text-xs font-black">{option.label}</span>
-                      <span className="mt-1 block text-[11px] text-white/70">{option.description}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <label className="mt-3 flex items-center rounded-full bg-white/10 px-4 py-3">
-                <input
-                  value={customBudget}
-                  onChange={(event) => updateCustomBudget(event.target.value)}
-                  inputMode="numeric"
-                  placeholder="自定义金额"
-                  className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-white outline-none placeholder:text-white/45"
-                />
-                <span className="ml-3 text-xs font-bold text-white/60">元/人</span>
-              </label>
-            </div>
-
-            <div className="rounded-3xl border border-white/15 bg-black/35 p-5 text-left backdrop-blur-md">
-              <p className="text-sm font-black">
-                旅游风格 <span className="text-xs text-white/45">{travelStyles.length}/3</span>
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {styleChips.map((chip) => {
-                  const isSelected = travelStyles.includes(chip);
-                  const isDisabled = !isSelected && travelStyles.length >= 3;
-
-                  return (
-                    <button
-                      key={chip}
-                      type="button"
-                      onClick={() => toggleTravelStyle(chip)}
-                      disabled={isDisabled}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold backdrop-blur-md transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
-                        isSelected
-                          ? "bg-white text-gray-950 shadow-lg shadow-white/10"
-                          : "bg-white/10 text-white hover:bg-white/20"
-                      }`}
-                    >
-                      {chip}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-white/15 bg-black/35 p-5 text-left backdrop-blur-md lg:col-span-3">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-black">美食与饮食偏好</p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {foodPreferenceOptions.map((preference) => {
-                      const isSelected = foodPreferences.includes(preference);
-
-                      return (
-                        <button
-                          key={preference}
-                          type="button"
-                          onClick={() => toggleFoodPreference(preference)}
-                          className={`rounded-full px-4 py-2 text-sm font-semibold transition-all ${
-                            isSelected ? "bg-orange-400 text-white" : "bg-white/10 text-white hover:bg-white/20"
-                          }`}
-                        >
-                          {preference}
-                        </button>
-                      );
-                    })}
-                  </div>
+          <details className={styles.preferences}>
+            <summary>同行、预算与偏好</summary>
+            <div className={styles.preferenceGrid}>
+              <fieldset>
+                <legend>同行人员</legend>
+                <div className={styles.chips}>
+                  {companions.map((companion) => (
+                    <button type="button" key={companion} aria-pressed={form.companion === companion} className={styles.chip}
+                      onClick={() => updateForm("companion", companion)}>{companion}</button>
+                  ))}
                 </div>
+              </fieldset>
+              <fieldset>
+                <legend>人均预算</legend>
+                <div className={styles.chips}>
+                  {budgets.map(({ value, label }) => (
+                    <button type="button" key={value} aria-pressed={form.budgetPreference === value && !form.customBudget}
+                      className={styles.chip} onClick={() => setDraft((state) => ({
+                        ...state, form: { ...state.form, budgetPreference: value, customBudget: "" },
+                      }))}>{label}</button>
+                  ))}
+                </div>
+                <input aria-label="自定义人均预算（元）" inputMode="numeric" value={form.customBudget} maxLength={12}
+                  onChange={(event) => updateForm("customBudget", event.target.value.replace(/\D/g, ""))}
+                  placeholder="自定义金额（元/人）" className="tuda-input" />
+              </fieldset>
+              <fieldset>
+                <legend>旅行风格 <small>{form.travelStyles.length}/3</small></legend>
+                <div className={styles.chips}>
+                  {travelOptions.map((item) => {
+                    const selected = form.travelStyles.includes(item);
+                    return <button type="button" key={item} className={styles.chip} aria-pressed={selected}
+                      disabled={!selected && form.travelStyles.length >= 3}
+                      onClick={() => updateForm("travelStyles", selected
+                        ? form.travelStyles.filter((value) => value !== item)
+                        : [...form.travelStyles, item])}>{item}</button>;
+                  })}
+                </div>
+              </fieldset>
+              <fieldset>
+                <legend>美食与口味</legend>
+                <div className={styles.chips}>
+                  {foodOptions.map((item) => {
+                    const selected = form.foodPreferences.includes(item);
+                    return <button type="button" key={item} className={styles.chip} aria-pressed={selected}
+                      onClick={() => updateForm("foodPreferences", selected
+                        ? form.foodPreferences.filter((value) => value !== item)
+                        : [...form.foodPreferences, item])}>{item}</button>;
+                  })}
+                </div>
+                <input aria-label="自定义口味" value={form.customFoodPreference} maxLength={120}
+                  onChange={(event) => updateForm("customFoodPreference", event.target.value)}
+                  placeholder="例如：不吃辣、想吃清淡" className="tuda-input" />
+              </fieldset>
+            </div>
+          </details>
+        </form>
 
-                <label className="w-full lg:max-w-sm">
-                  <span className="text-xs font-semibold text-white/60">自定义口味</span>
-                  <input
-                    value={customFoodPreference}
-                    onChange={(event) => setCustomFoodPreference(event.target.value)}
-                    placeholder="例如：不吃辣、想吃清淡"
-                    className="mt-2 w-full rounded-full bg-white/10 px-5 py-3 text-sm font-semibold text-white outline-none placeholder:text-white/45 focus:bg-white/15"
-                  />
-                </label>
+        {current ? (
+          <section id="generated-plan" aria-labelledby="current-trip-heading" className={styles.result}>
+            <div className={styles.resultHeader}>
+              <div>
+                <p className="tuda-kicker">行程工作台</p>
+                <h2 id="current-trip-heading">{current.context.destination} · {current.context.days} 天</h2>
+                <p>{current.context.departureDate ? current.context.departureDate + " 出发" : "出发日期待定"}</p>
+              </div>
+              <div className={styles.resultActions}>
+                {previous ? <button type="button" className="tuda-button-secondary" onClick={undoLastEdit}>撤销上次修改</button> : null}
+                <button type="button" className="tuda-button-secondary" disabled={Boolean(resultAction)}
+                  onClick={() => void sharePlan(current)}>{resultAction === "share" ? "正在生成链接…" : "分享链接"}</button>
+                <button type="button" className="tuda-button-secondary"
+                  onClick={() => downloadTravelPlanHtml(current.plan)}>下载行程卡</button>
+                <button type="button" className="tuda-button-primary" disabled={Boolean(resultAction)}
+                  onClick={() => void savePlan(current)}>{resultAction === "save" ? "收藏中…" : "收藏行程"}</button>
               </div>
             </div>
-          </div>
-        </section>
-      </form>
+            {submittedPreferencesDiffer ? <p className={styles.notice}>上方规划条件已修改，可点击「生成行程」更新结果。</p> : null}
+            {resultFeedback ? (
+              <p role={resultFeedback.error ? "alert" : "status"} className={resultFeedback.error ? styles.error : styles.notice}>{resultFeedback.text}</p>
+            ) : null}
+            {shareLink ? <label className={styles.shareField}>
+              <span>分享地址</span>
+              <input className="tuda-input" readOnly value={shareLink} onFocus={(event) => event.target.select()} />
+            </label> : null}
+            <WeatherInsightCard {...current.context} />
+            <PlanDisplay plan={current.plan} />
+            <ItineraryAgentPanel
+              key={generation}
+              userId={guestId}
+              plan={current.plan}
+              destination={current.context.destination}
+              departureDate={current.context.departureDate}
+              memoryPreferences={userMemory.preferences}
+              onPlanUpdated={(plan) => updatePlanFromAgent(current, plan)}
+            />
+            <div className={styles.socialTools}><SocialShareModal tripSummary={current.plan} /></div>
+          </section>
+        ) : null}
 
-      <WeatherInsightCard destination={destination} days={Number(days)} />
-
-      <UserMemoryPanel guestId={guestId} onMemoryChanged={setUserMemory} />
-
-      <section className="px-5 pb-10 sm:px-8 lg:px-12">
-        <div className="mx-auto grid w-full max-w-6xl gap-4 rounded-3xl border border-white/15 bg-black/40 p-5 shadow-2xl shadow-black/20 backdrop-blur-xl lg:grid-cols-[1.1fr_0.9fr] lg:p-6">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
-              Social Copy
-            </p>
-            <h2 className="mt-2 text-2xl font-black">小红书推荐文案，一键帮你写好</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-white/55">
-              生成旅行路线后，页面会出现“一键生成发圈文案”按钮。可以切换小红书风或朋友圈风，AI 会根据你的行程亮点、景点和美食自动写成可编辑文案。
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-            {["爆款标题", "亮点提炼", "照片九宫格预览", "可读行程卡下载"].map((feature) => (
-              <div
-                key={feature}
-                className="rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-black text-white/85"
-              >
-                {feature}
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="px-5 pb-10 sm:px-8 lg:px-12">
-        <div className="mx-auto w-full max-w-6xl">
-          <div className="mb-4 flex items-end justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold text-orange-200">Popular Now</p>
-              <h2 className="mt-1 text-2xl font-black">热门目的地</h2>
-            </div>
-            <p className="hidden text-sm text-gray-300 sm:block">点击城市后直接带入搜索框。</p>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {destinations.map((destinationItem) => (
-              <button
-                key={destinationItem.city}
-                type="button"
-                onClick={() => setDestination(destinationItem.city)}
-                className="rounded-2xl border border-white/10 bg-black/40 p-5 text-left backdrop-blur-md transition-all hover:-translate-y-1 hover:bg-black/50"
-              >
-                <span className="text-sm font-black text-orange-200">{destinationItem.icon}</span>
-                <h3 className="mt-4 text-lg font-black">{destinationItem.city}</h3>
-                <p className="mt-2 text-sm leading-6 text-gray-300">
-                  {destinationItem.description}
-                </p>
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {plan ? (
-        <section id="generated-plan" className="bg-[#070707] px-5 py-10 sm:px-8 lg:px-12">
-          <div className="mx-auto mb-6 flex max-w-6xl flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
-                Generated Route
-              </p>
-              <h2 className="mt-2 text-3xl font-black">你的专属路线</h2>
-              {saveMessage ? (
-                <p className="mt-3 max-w-xl rounded-2xl border border-orange-200/20 bg-orange-300/10 px-4 py-3 text-sm font-semibold text-orange-100">
-                  {saveMessage}
-                </p>
-              ) : null}
-              {shareMessage ? (
-                <p className="mt-3 max-w-xl rounded-2xl border border-emerald-200/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-100">
-                  {shareMessage}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <SocialShareModal tripSummary={plan} />
-              <button
-                type="button"
-                onClick={shareCurrentPlan}
-                className="rounded-full bg-orange-400 px-5 py-3 text-sm font-black text-white shadow-xl shadow-orange-500/25 transition-all hover:-translate-y-0.5 hover:bg-orange-300"
-              >
-                分享链接
-              </button>
-              <button
-                type="button"
-                onClick={saveCurrentPlan}
-                className={`rounded-full px-5 py-3 text-sm font-black transition-all hover:-translate-y-0.5 ${
-                  hasUnsavedAgentChanges
-                    ? "bg-gradient-to-r from-orange-400 to-red-400 text-white shadow-xl shadow-orange-500/30 hover:shadow-2xl hover:shadow-orange-500/40"
-                    : "bg-white text-slate-950 hover:bg-orange-100"
-                }`}
-              >
-                {hasUnsavedAgentChanges ? "收藏最新版" : "收藏行程"}
-              </button>
-              <button
-                type="button"
-                onClick={downloadPlan}
-                className="rounded-full border border-white/15 bg-white/10 px-5 py-3 text-sm font-black text-white backdrop-blur-md transition-all hover:-translate-y-0.5 hover:bg-white/20"
-              >
-                下载行程卡
-              </button>
-            </div>
-          </div>
-          <ItineraryAgentPanel
-            userId={guestId}
-            plan={plan}
-            destination={destination}
-            memoryPreferences={userMemory.preferences}
-            onPlanUpdated={updatePlanFromAgent}
-          />
-          <PlanDisplay plan={plan} />
-        </section>
-      ) : null}
+        <details className={styles.memory}>
+          <summary>我的旅行偏好</summary>
+          <UserMemoryPanel guestId={guestId} onMemoryChanged={setUserMemory} />
+        </details>
+      </div>
     </div>
   );
 }

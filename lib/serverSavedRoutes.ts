@@ -15,7 +15,9 @@ export async function saveRoute(userId: string, savedTrip: SavedTrip) {
     file, (store) => {
       const trips = store[userId] ?? [];
       const signature = JSON.stringify(savedTrip.plan);
-      const existing = trips.find((trip) => JSON.stringify(trip.plan) === signature);
+      const existing = trips.find((trip) => trip.destination === savedTrip.destination
+        && trip.departureDate === savedTrip.departureDate
+        && JSON.stringify(trip.plan) === signature);
       if (existing) return { trips, savedTrip: existing, created: false };
       const next = [savedTrip, ...trips];
       store[userId] = next;

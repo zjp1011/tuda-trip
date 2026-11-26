@@ -25,7 +25,19 @@ globalThis.fetch = async (input, init) => {
 
   if (url.origin === "https://geocoding-api.open-meteo.com") {
     assert.equal(headers.get("authorization"), null, "The browser's DeepSeek Key must never reach weather services.");
-    return Response.json({ results: [] });
+    return Response.json({ results: [{ name: "成都", country: "中国", latitude: 30.57, longitude: 104.07 }] });
+  }
+  if (url.origin === "https://api.open-meteo.com") {
+    assert.equal(headers.get("authorization"), null, "The browser's DeepSeek Key must never reach weather services.");
+    const time = Array.from({ length: 4 }, (_, offset) =>
+      new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10),
+    );
+    return Response.json({
+      daily: {
+        time, weather_code: [0, 1, 61, 2], temperature_2m_max: [23, 22, 20, 21],
+        temperature_2m_min: [17, 16, 15, 16], precipitation_probability_max: [0, 10, 85, 15],
+      },
+    });
   }
 
   assert.equal(url.href, modelURL, "Smoke tests must never call a real external endpoint.");

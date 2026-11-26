@@ -12,26 +12,79 @@ import {
   SAVED_TRIPS_STORAGE_KEY,
   type SavedTrip,
 } from "@/lib/savedTrips";
+import { isRenderableTravelPlan } from "@/lib/travelPlanGuardrails";
 
-function readLegacySavedTrips() {
-  const savedTripsJson =
-    window.localStorage.getItem(SAVED_TRIPS_STORAGE_KEY) ??
-    window.localStorage.getItem(LEGACY_SAVED_TRIPS_STORAGE_KEY);
+const legacyStorageKeys = [SAVED_TRIPS_STORAGE_KEY, LEGACY_SAVED_TRIPS_STORAGE_KEY];
 
-  if (!savedTripsJson) {
-    return [];
-  }
-
+function readLegacySavedTrips(key: string): unknown[] | null {
   try {
-    const parsedSavedTrips = JSON.parse(savedTripsJson) as SavedTrip[];
-    window.localStorage.setItem(SAVED_TRIPS_STORAGE_KEY, JSON.stringify(parsedSavedTrips));
-    window.localStorage.removeItem(LEGACY_SAVED_TRIPS_STORAGE_KEY);
-    return parsedSavedTrips;
+    const stored = window.localStorage.getItem(key);
+    if (stored === null) return [];
+    const entries: unknown = JSON.parse(stored);
+    return Array.isArray(entries) ? entries : null;
   } catch {
-    window.localStorage.removeItem(SAVED_TRIPS_STORAGE_KEY);
-    window.localStorage.removeItem(LEGACY_SAVED_TRIPS_STORAGE_KEY);
-    return [];
+    return null;
   }
+}
+
+function readLegacyTrip(value: unknown): Pick<SavedTrip, "destination" | "plan"> | null {
+  if (!value || typeof value !== "object" || !("plan" in value) || !isRenderableTravelPlan(value.plan)) {
+    return null;
+  }
+  const destination = "destination" in value && typeof value.destination === "string"
+    ? value.destination
+    : "未命名目的地";
+  return { destination, plan: value.plan };
+}
+
+async function migrateLegacySavedTrips(guestId: string) {
+  const pending = new Map<string, Pick<SavedTrip, "destination" | "plan">>();
+  for (const key of legacyStorageKeys) {
+    for (const entry of readLegacySavedTrips(key) ?? []) {
+      const trip = readLegacyTrip(entry);
+      if (!trip) continue;
+      const signature = JSON.stringify(trip.plan);
+      if (!pending.has(signature)) pending.set(signature, trip);
+    }
+  }
+
+  const saved = new Set<string>();
+  for (const [signature, trip] of pending) {
+    try {
+      const response = await fetch("/api/save-route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: guestId, ...trip }),
+      });
+      if (!response.ok) continue;
+      const data = (await response.json()) as { savedTrip?: SavedTrip } | null;
+      if (JSON.stringify(data?.savedTrip?.plan) === signature) saved.add(signature);
+    } catch {
+      // Keep this entry so a later visit to the diary can retry it.
+    }
+  }
+
+  let remaining = false;
+  for (const key of legacyStorageKeys) {
+    const entries = readLegacySavedTrips(key);
+    if (!entries) {
+      remaining = true;
+      continue;
+    }
+    const unsaved = entries.filter((entry) => {
+      const trip = readLegacyTrip(entry);
+      return !trip || !saved.has(JSON.stringify(trip.plan));
+    });
+    remaining ||= unsaved.length > 0;
+    if (unsaved.length === entries.length) continue;
+    try {
+      if (unsaved.length) window.localStorage.setItem(key, JSON.stringify(unsaved));
+      else window.localStorage.removeItem(key);
+    } catch {
+      remaining = true;
+    }
+  }
+  return remaining;
 }
 
 async function copyTextToClipboard(text: string) {
@@ -70,27 +123,7 @@ export default function DiaryPage() {
       setErrorMessage("");
 
       try {
-        const legacyTrips = readLegacySavedTrips();
-
-        if (legacyTrips.length > 0) {
-          await Promise.all(
-            legacyTrips.map((trip) =>
-              fetch("/api/save-route", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  userId: guestId,
-                  destination: trip.destination,
-                  plan: trip.plan,
-                }),
-              }),
-            ),
-          );
-          window.localStorage.removeItem(SAVED_TRIPS_STORAGE_KEY);
-          window.localStorage.removeItem(LEGACY_SAVED_TRIPS_STORAGE_KEY);
-        }
+        const hasLocalTripsToRetry = await migrateLegacySavedTrips(guestId);
 
         const response = await fetch(`/api/save-route?userId=${encodeURIComponent(guestId)}`);
         const data = (await response.json()) as { trips?: SavedTrip[]; error?: string };
@@ -111,6 +144,9 @@ export default function DiaryPage() {
 
         if (traceResponse.ok) {
           setAgentTraces(traceData.traces ?? []);
+        }
+        if (hasLocalTripsToRetry) {
+          setErrorMessage("还有旧收藏待同步，本地记录已保留。重新打开行程日记可重试。");
         }
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "获取收藏行程失败");
@@ -191,17 +227,12 @@ export default function DiaryPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#070707] px-5 py-8 text-white sm:px-8 lg:px-12">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
-              Saved Trips
-            </p>
-            <h1 className="mt-2 text-3xl font-black">我的行程</h1>
-          </div>
-          <p className="text-sm text-white/45">{savedTrips.length} 条已收藏路线</p>
-        </div>
+    <div className="tuda-subpage">
+      <div>
+        <header className="tuda-subpage-heading mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <h1>我的行程</h1>
+          <p className="text-sm text-[var(--tuda-muted)]">{savedTrips.length} 条已收藏路线</p>
+        </header>
 
         {errorMessage ? (
           <p className="mb-5 rounded-2xl border border-red-300/20 bg-red-500/15 px-4 py-3 text-sm font-semibold text-red-100">
@@ -210,17 +241,17 @@ export default function DiaryPage() {
         ) : null}
 
         {shareMessage ? (
-          <p className="mb-5 rounded-2xl border border-orange-200/20 bg-orange-300/10 px-4 py-3 text-sm font-semibold text-orange-100">
+          <p className="tuda-panel mb-5 px-4 py-3 text-sm text-[var(--tuda-accent)]">
             {shareMessage}
           </p>
         ) : null}
 
         {isLoading ? (
-          <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-8 text-center backdrop-blur-xl">
-            <p className="text-lg font-black">正在读取你的游客行程...</p>
+          <div className="tuda-panel p-8 text-center">
+            <p className="text-lg font-semibold">正在读取你的收藏…</p>
           </div>
         ) : savedTrips.length > 0 ? (
-          <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
+          <div className="grid gap-6 xl:grid-cols-[minmax(17rem,0.45fr)_minmax(0,1fr)]">
             <div className="space-y-4">
               {savedTrips.map((savedTrip) => {
                 const isSelected = selectedTrip?.id === savedTrip.id;
@@ -228,18 +259,21 @@ export default function DiaryPage() {
                 return (
                   <article
                     key={savedTrip.id}
-                    className={`rounded-3xl border p-5 text-white shadow-xl shadow-black/20 backdrop-blur-xl transition-all hover:-translate-y-1 ${
+                    className={`rounded-2xl border p-5 ${
                       isSelected
-                        ? "border-orange-300/40 bg-orange-500/15"
-                        : "border-white/10 bg-white/[0.06] hover:bg-white/[0.09]"
+                        ? "border-[#406e72] bg-[#132832]"
+                        : "border-[var(--tuda-line)] bg-[var(--tuda-panel)]"
                     }`}
                   >
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">
+                    <p className="text-xs font-medium text-[var(--tuda-muted)]">
                       {new Date(savedTrip.createdAt).toLocaleDateString("zh-CN")}
                     </p>
-                    <h2 className="mt-3 text-xl font-black">{savedTrip.title}</h2>
-                    <p className="mt-2 text-sm text-white/50">{savedTrip.destination}</p>
-                    <p className="mt-4 text-sm font-bold text-orange-200">
+                    <h2 className="mt-3 text-lg font-bold break-words">{savedTrip.title}</h2>
+                    <p className="mt-2 text-sm text-[var(--tuda-muted)]">
+                      {savedTrip.destination}
+                      {savedTrip.departureDate ? ` · ${savedTrip.departureDate} 出发` : null}
+                    </p>
+                    <p className="mt-3 text-sm font-semibold text-[var(--tuda-accent)]">
                       {savedTrip.plan.budget_per_person}
                     </p>
 
@@ -247,32 +281,32 @@ export default function DiaryPage() {
                       <button
                         type="button"
                         onClick={() => setSelectedTrip(savedTrip)}
-                        className="rounded-full bg-white px-4 py-2 text-xs font-black text-slate-950 transition-all hover:bg-orange-100"
+                        className="tuda-button-primary"
                       >
                         查看
                       </button>
                       <button
                         type="button"
                         onClick={() => downloadTravelPlanHtml(savedTrip.plan)}
-                        className="rounded-full bg-white/10 px-4 py-2 text-xs font-black text-white transition-all hover:bg-white/20"
+                        className="tuda-button-secondary"
                       >
                         下载行程卡
                       </button>
                       <button
                         type="button"
                         onClick={() => shareSavedTrip(savedTrip)}
-                        className="rounded-full bg-orange-400 px-4 py-2 text-xs font-black text-white transition-all hover:bg-orange-300"
+                        className="tuda-button-secondary"
                       >
                         分享链接
                       </button>
                       <SocialShareModal
                         tripSummary={savedTrip.plan}
-                        buttonClassName="rounded-full bg-gradient-to-r from-orange-400 to-red-400 px-4 py-2 text-xs font-black text-white shadow-lg shadow-orange-500/20 transition-all hover:-translate-y-0.5 hover:shadow-orange-500/30"
+                        buttonClassName="tuda-button-secondary"
                       />
                       <button
                         type="button"
                         onClick={() => removeSavedTrip(savedTrip.id)}
-                        className="rounded-full bg-white/10 px-4 py-2 text-xs font-black text-white/70 transition-all hover:bg-red-500/30 hover:text-white"
+                        className="tuda-button-secondary text-[#ffc3b7] hover:text-[#ffe1da]"
                       >
                         移除
                       </button>
@@ -286,28 +320,23 @@ export default function DiaryPage() {
               {selectedTrip ? (
                 <PlanDisplay plan={selectedTrip.plan} />
               ) : (
-                <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-8 text-center backdrop-blur-xl">
-                  <p className="text-lg font-black">选择一条行程查看详情</p>
+                <div className="tuda-panel p-8 text-center">
+                  <p className="text-lg font-semibold">选择一条行程查看详情</p>
                 </div>
               )}
             </div>
           </div>
         ) : (
-          <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-8 text-center backdrop-blur-xl">
-            <p className="text-lg font-black">还没有收藏的行程</p>
-            <p className="mt-2 text-sm text-white/45">在首页生成路线后点击“收藏行程”，这里就会保存下来。</p>
+          <div className="tuda-panel p-8 text-center">
+            <p className="text-lg font-semibold">还没有收藏的行程</p>
+            <p className="mt-2 text-sm text-[var(--tuda-muted)]">在首页生成路线后，点击「收藏行程」。</p>
           </div>
         )}
 
-        <section className="mt-8 rounded-3xl border border-white/10 bg-white/[0.06] p-6 text-white backdrop-blur-xl">
+        <section className="tuda-panel mt-8 p-5 sm:p-6">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
-                Agent Trace
-              </p>
-              <h2 className="mt-2 text-2xl font-black">最近执行记录</h2>
-            </div>
-            <p className="text-sm text-white/45">{agentTraces.length} 条记录</p>
+            <h2 className="text-xl font-bold">最近执行记录</h2>
+            <p className="text-sm text-[var(--tuda-muted)]">{agentTraces.length} 条记录</p>
           </div>
 
           {agentTraces.length > 0 ? (
@@ -315,12 +344,12 @@ export default function DiaryPage() {
               {agentTraces.slice(0, 6).map((trace) => (
                 <article
                   key={trace.id}
-                  className="rounded-2xl border border-white/10 bg-black/25 p-4"
+                  className="rounded-xl border border-[var(--tuda-line)] bg-[#0c1723] p-4"
                 >
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="text-sm font-black">{trace.instruction}</p>
-                      <p className="mt-1 text-xs text-white/40">
+                      <p className="mt-1 text-xs text-[var(--tuda-muted)]">
                         {new Date(trace.createdAt).toLocaleString("zh-CN")}
                       </p>
                     </div>
@@ -331,7 +360,7 @@ export default function DiaryPage() {
                           : "bg-red-300/15 text-red-100"
                       }`}
                     >
-                      {trace.status === "success" ? "SUCCESS" : "FAILED"}
+                      {trace.status === "success" ? "已完成" : "失败"}
                     </span>
                   </div>
 
@@ -347,8 +376,8 @@ export default function DiaryPage() {
                   </div>
 
                   {trace.weatherSummary ? (
-                    <p className="mt-3 text-xs leading-5 text-orange-100/70">
-                      天气工具：{trace.weatherSummary}
+                    <p className="mt-3 text-xs leading-5 text-[var(--tuda-muted)]">
+                      天气参考 {trace.weatherSummary}
                     </p>
                   ) : null}
 

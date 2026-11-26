@@ -33,7 +33,7 @@ export type AgentIntent =
 export type AgentToolAction = {
   toolName: string;
   label: string;
-  status: "done";
+  status: "done" | "skipped";
   detail: string;
 };
 
@@ -227,6 +227,7 @@ export function buildAgentToolActions(
   plan: TravelPlan,
   instruction: string,
   report = analyzeTravelPlan(plan),
+  forecastDays = 0,
 ): AgentToolAction[] {
   const intent = detectAgentIntent(instruction);
   const editScope = detectAgentEditScope(plan, instruction);
@@ -300,8 +301,10 @@ export function buildAgentToolActions(
     actions.push({
       toolName: "weather_tool",
       label: "查询目的地天气",
-      status: "done",
-      detail: "获取目的地近期天气，用于替换雨天户外点、调整高温时段或补充穿搭建议。",
+      status: forecastDays > 0 ? "done" : "skipped",
+      detail: forecastDays > 0
+        ? `已获取行程日期内 ${forecastDays} 天的预报，可据此调整室内外安排。`
+        : "暂无与这次行程匹配的预报，未使用天气数据。",
     });
   }
 

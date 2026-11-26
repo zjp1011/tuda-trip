@@ -122,7 +122,7 @@ export default function SocialShareModal({ tripSummary, buttonClassName }: Socia
         onClick={openModal}
         className={
           buttonClassName ??
-          "rounded-full bg-gradient-to-r from-orange-400 to-red-400 px-5 py-3 text-sm font-black text-white shadow-xl shadow-orange-500/30 transition-all hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-orange-500/40"
+          "rounded-full bg-gradient-to-r from-teal-400 to-cyan-400 px-5 py-3 text-sm font-black text-white shadow-xl shadow-teal-500/30 transition-all hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-teal-500/40"
         }
       >
         一键生成发圈文案
@@ -133,7 +133,7 @@ export default function SocialShareModal({ tripSummary, buttonClassName }: Socia
           <div className="relative max-h-[92vh] w-full max-w-3xl overflow-hidden rounded-t-[2rem] border border-white/15 bg-[#111] text-white shadow-2xl sm:rounded-[2rem]">
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-200">
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-teal-200">
                   Social Copy
                 </p>
                 <h2 className="mt-1 text-xl font-black">一键生成发圈文案</h2>
@@ -201,13 +201,13 @@ export default function SocialShareModal({ tripSummary, buttonClassName }: Socia
               <section className="mt-5">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-sm font-black">文案编辑区</p>
-                  {isGenerating ? <span className="text-xs font-bold text-orange-200">生成中...</span> : null}
+                  {isGenerating ? <span className="text-xs font-bold text-teal-200">生成中...</span> : null}
                 </div>
                 <textarea
                   value={copyText}
                   onChange={(event) => setCopyText(event.target.value)}
                   placeholder="AI 生成的文案会出现在这里，也可以手动修改。"
-                  className="min-h-64 w-full resize-none rounded-3xl border border-white/10 bg-white/[0.06] px-5 py-4 text-sm leading-7 text-white outline-none placeholder:text-white/35 focus:border-orange-300/40"
+                  className="min-h-64 w-full resize-none rounded-3xl border border-white/10 bg-white/[0.06] px-5 py-4 text-sm leading-7 text-white outline-none placeholder:text-white/35 focus:border-teal-300/40"
                 />
               </section>
 
@@ -218,11 +218,11 @@ export default function SocialShareModal({ tripSummary, buttonClassName }: Socia
               ) : null}
 
               <div className="sticky bottom-0 mt-5 flex flex-col gap-3 border-t border-white/10 bg-[#111]/95 py-4 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between">
-                <p className="min-h-5 text-sm font-semibold text-orange-200">{toastMessage}</p>
+                <p className="min-h-5 text-sm font-semibold text-teal-200">{toastMessage}</p>
                 <button
                   type="button"
                   onClick={copyToClipboard}
-                  className="rounded-full bg-white px-6 py-3 text-sm font-black text-slate-950 transition-all hover:-translate-y-0.5 hover:bg-orange-100"
+                  className="rounded-full bg-white px-6 py-3 text-sm font-black text-slate-950 transition-all hover:-translate-y-0.5 hover:bg-teal-100"
                 >
                   一键复制文案
                 </button>

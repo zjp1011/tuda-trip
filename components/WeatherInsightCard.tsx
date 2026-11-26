@@ -6,122 +6,70 @@ import type { DestinationWeather } from "../lib/weatherTool";
 type WeatherInsightCardProps = {
   destination: string;
   days: number;
+  departureDate: string;
 };
 
-export default function WeatherInsightCard({ destination, days }: WeatherInsightCardProps) {
-  const [weather, setWeather] = useState<DestinationWeather | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
+type ForecastResult = { query: string; weather: DestinationWeather | null; error: string };
+
+export default function WeatherInsightCard({ destination, days, departureDate }: WeatherInsightCardProps) {
+  const [forecast, setForecast] = useState<ForecastResult | null>(null);
+  const query = new URLSearchParams({ destination, days: String(days), departureDate }).toString();
 
   useEffect(() => {
-    const trimmedDestination = destination.trim();
-
-    if (!trimmedDestination) {
-      setWeather(null);
-      setErrorMessage("");
-      return;
-    }
-
+    if (!departureDate) return;
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => {
-      const loadWeather = async () => {
-        setIsLoading(true);
-        setErrorMessage("");
 
-        try {
-          const response = await fetch(
-            `/api/weather?destination=${encodeURIComponent(trimmedDestination)}&days=${days}`,
-            { signal: controller.signal },
-          );
-          const data = (await response.json()) as {
-            weather?: DestinationWeather;
-            error?: string;
-          };
-
-          if (!response.ok) {
-            throw new Error(data.error ?? "天气工具暂时不可用");
-          }
-
-          setWeather(data.weather ?? null);
-        } catch (error) {
-          if (error instanceof DOMException && error.name === "AbortError") {
-            return;
-          }
-
-          setWeather(null);
-          setErrorMessage(error instanceof Error ? error.message : "天气工具暂时不可用");
-        } finally {
-          setIsLoading(false);
+    async function load() {
+      try {
+        const response = await fetch("/api/weather?" + query, { signal: controller.signal });
+        const data = await response.json() as { weather?: DestinationWeather; error?: string };
+        if (!response.ok) throw new Error(data.error ?? "天气预报暂时不可用。");
+        if (!controller.signal.aborted) setForecast({ query, weather: data.weather ?? null, error: "" });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setForecast({ query, weather: null, error: error instanceof Error ? error.message : "天气预报暂时不可用。" });
         }
-      };
+      }
+    }
+    void load();
+    return () => controller.abort();
+  }, [departureDate, query]);
 
-      void loadWeather();
-    }, 500);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-      controller.abort();
-    };
-  }, [destination, days]);
-
-  if (!destination.trim()) {
-    return null;
-  }
+  if (!departureDate) return null;
+  const current = forecast?.query === query ? forecast : null;
+  const weather = current?.weather;
 
   return (
-    <section className="px-5 pb-8 sm:px-8 lg:px-12">
-      <div className="mx-auto w-full max-w-6xl rounded-3xl border border-white/15 bg-black/40 p-5 text-left text-white shadow-2xl shadow-black/20 backdrop-blur-xl lg:p-6">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-orange-200">
-              Weather Tool
-            </p>
-            <h2 className="mt-2 text-2xl font-black">
-              {isLoading ? "正在查询目的地天气..." : `${weather?.resolvedName ?? destination} 天气参考`}
-            </h2>
-          </div>
-          {weather ? <p className="text-sm text-white/45">{weather.summary}</p> : null}
+    <section className="tuda-panel p-5 sm:p-6" aria-labelledby="forecast-heading">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="tuda-kicker">行程天气</p>
+          <h3 id="forecast-heading" className="mt-1 text-xl font-bold">{weather?.resolvedName ?? destination}</h3>
         </div>
-
-        {errorMessage ? (
-          <p className="mt-4 rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-semibold text-white/55">
-            {errorMessage}
-          </p>
-        ) : null}
-
-        {weather ? (
-          <>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {weather.days.slice(0, 4).map((day) => (
-                <div
-                  key={day.date}
-                  className="rounded-2xl border border-white/10 bg-white/[0.06] p-4"
-                >
-                  <p className="text-xs font-bold text-white/40">{day.date}</p>
-                  <p className="mt-2 text-lg font-black text-orange-200">{day.weatherLabel}</p>
-                  <p className="mt-2 text-sm text-white/60">
-                    {day.temperatureMin}-{day.temperatureMax}°C
-                  </p>
-                  <p className="mt-1 text-xs text-white/45">降雨概率 {day.precipitationProbability}%</p>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
-              {(weather.warnings.length > 0 ? weather.warnings : weather.suggestions)
-                .slice(0, 2)
-                .map((item) => (
-                  <p
-                    key={item}
-                    className="rounded-2xl border border-orange-200/15 bg-orange-300/10 px-4 py-3 text-sm font-semibold text-orange-100/80"
-                  >
-                    {item}
-                  </p>
-                ))}
-            </div>
-          </>
-        ) : null}
+        {weather ? <p className="max-w-sm text-sm leading-6 text-[var(--tuda-muted)]">{weather.summary}</p> : null}
       </div>
+      {!current || !weather ? (
+        <p className="mt-3 text-sm leading-6 text-[var(--tuda-muted)]" role="status">
+          {!current ? "正在查询对应日期的预报…" : current.error || "所选日期暂无可用预报，临近出发时再查看。"}
+        </p>
+      ) : (
+        <>
+          <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+            {weather.days.map((day) => (
+              <div key={day.date} className="rounded-lg border border-[var(--tuda-line)] bg-[#0c1521] p-3">
+                <p className="text-xs text-[var(--tuda-muted)]">{day.date}</p>
+                <p className="mt-1 font-semibold text-[var(--tuda-accent)]">{day.weatherLabel}</p>
+                <p className="mt-1 text-sm">{day.temperatureMin}–{day.temperatureMax}°C</p>
+                <p className="mt-1 text-xs text-[var(--tuda-muted)]">降雨概率 {day.precipitationProbability}%</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs leading-5 text-[var(--tuda-muted)]">
+            预报来源 Open-Meteo
+            {weather.days.length < days ? " · 仅显示已有预报的行程日期" : ""}
+          </p>
+        </>
+      )}
     </section>
   );
 }

@@ -13,9 +13,9 @@ export default async function WorkspaceLayout({ children }: { children: React.Re
 
   return (
     <DeepSeekKeyProvider>
-      <div className="flex h-screen flex-col overflow-hidden bg-[#070707] text-gray-950 md:flex-row">
+      <div className="tuda-shell">
         <Sidebar />
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        <main className="tuda-content">
           <DeepSeekKeyField />
           {children}
         </main>

@@ -52,13 +52,20 @@ export function DeepSeekKeyField() {
   const input = useRef<HTMLInputElement>(null);
 
   return (
-    <div className="border-b border-white/10 bg-[#090909] px-5 py-3 text-white sm:px-8 lg:px-12">
-      <div className="mx-auto flex max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    <div className="tuda-credential">
+      <div className="tuda-credential-inner">
         <div>
-          <label htmlFor={keyId} className="block text-sm font-semibold">DeepSeek API Key</label>
-          <p id={`${keyId}-help`} className="mt-0.5 text-xs text-white/65">仅在当前标签页保留，刷新后需重新填写。</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor={keyId} className="text-sm font-semibold">DeepSeek API Key</label>
+            {key.trim() && (
+              <span className="text-xs font-medium text-[var(--tuda-accent)]">已填入</span>
+            )}
+          </div>
+          <p id={`${keyId}-help`} className="mt-0.5 text-xs leading-5 text-[var(--tuda-muted)]">
+            仅保留在当前标签页，刷新后需重新填写。
+          </p>
         </div>
-        <div className="flex min-w-0 gap-2 sm:w-72">
+        <div className="tuda-credential-field">
           <input
             ref={input}
             id={keyId}
@@ -71,13 +78,13 @@ export function DeepSeekKeyField() {
             autoCapitalize="none"
             spellCheck={false}
             maxLength={maxKeyLength}
-            className="h-10 min-w-0 flex-1 rounded-lg border border-white/20 bg-white/[0.06] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-orange-300"
+            className="tuda-input"
           />
           <button
             type="button"
             onClick={() => { setKey(""); input.current?.focus(); }}
             disabled={!key}
-            className="shrink-0 rounded-lg px-2.5 text-sm text-white/75 hover:bg-white/10 hover:text-white focus-visible:outline-orange-300 disabled:opacity-40"
+            className="tuda-button-secondary shrink-0"
           >
             清除
           </button>
