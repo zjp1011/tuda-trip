@@ -10,12 +10,12 @@
   },
   "dependencies": {
     "@upstash/vector": "^1.2.3",
-    "next": "16.2.12",
+    "next": "16.4.6",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@next/swc-wasm-nodejs": "^16.2.12",
+    "@next/swc-wasm-nodejs": "16.4.6",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
@@ -24,6 +24,6 @@
     "typescript": "7.0.2"
   },
   "optionalDependencies": {
-    "@next/swc-win32-x64-msvc": "^16.2.12"
+    "@next/swc-win32-x64-msvc": "16.4.6"
   }
 }
